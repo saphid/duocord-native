@@ -40,7 +40,7 @@ extension AppModel {
         guard message > 0, let info = eligibleReadChannels.first(where: { $0.id == channel }),
               let latest = info.lastMessageID, latest > 0 else { return nil }
         let boundary = min(message, latest)
-        guard boundary > (store.readStates[channel]?.lastMessageID ?? 0) else { return nil }
+        guard boundary > (store.readBoundary(info) ?? 0) else { return nil }
         // Capture partialness before waiting in the FIFO. A later plain
         // arrival cannot turn a full read into a partial one.
         return enqueueRead([ReadAcknowledgement(channel: channel, message: boundary)], cancellationSensitive: true,
@@ -217,7 +217,7 @@ extension AppModel {
     func unreadBoundary(for channel: Snowflake) -> Snowflake? {
         if store.manualUnreadChannels.contains(channel) { return store.readStates[channel]?.lastMessageID ?? 0 }
         if let marker = unreadMarkers[channel] { return marker }
-        if let info = store.channel(channel), store.isUnread(info) { return store.readStates[channel]?.lastMessageID ?? 0 }
+        if let info = store.channel(channel), store.isUnread(info) { return store.readBoundary(info) }
         return nil
     }
 

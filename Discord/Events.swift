@@ -216,7 +216,14 @@ nonisolated struct GuildMemberUpdate: Decodable, Sendable {
 }
 
 nonisolated struct ThreadListSync: Decodable, Sendable {
-    struct MemberEntry: Decodable, Sendable { var id: Snowflake? }
+    struct MemberEntry: Decodable, Sendable {
+        var id: Snowflake?
+        var joinTimestamp: String?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case joinTimestamp = "join_timestamp"
+        }
+    }
     var guildID: Snowflake
     var threads: [Channel]
     /// The current user's thread memberships among `threads`.
@@ -230,7 +237,11 @@ nonisolated struct ThreadListSync: Decodable, Sendable {
 nonisolated struct ThreadMembersUpdate: Decodable, Sendable {
     struct Added: Decodable, Sendable {
         var userID: Snowflake?
-        enum CodingKeys: String, CodingKey { case userID = "user_id" }
+        var joinTimestamp: String?
+        enum CodingKeys: String, CodingKey {
+            case userID = "user_id"
+            case joinTimestamp = "join_timestamp"
+        }
     }
     var id: Snowflake
     var addedMembers: [Added]?

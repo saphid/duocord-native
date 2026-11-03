@@ -49,13 +49,15 @@ final class DiscordStore {
     private(set) var guildOrder: [Snowflake] = []
     private(set) var folders: [GuildFolder] = []
     private(set) var channels: [Snowflake: Channel] = [:] {
-        didSet { channelIndexValid = false; derivedRevision &+= 1 }
+        didSet { channelIndexValid = false; threadIndexCache = [:]; derivedRevision &+= 1 }
     }
     /// Bumped when anything badges or sections depend on changes.
     @ObservationIgnored private var derivedRevision = 0
     @ObservationIgnored private var channelIndexValid = false
     @ObservationIgnored private(set) var channelRevision = 0
     @ObservationIgnored private var channelRevisions: [Snowflake: Int] = [:]
+    /// Edits and deletions fence excerpts, including channels with no timeline.
+    private(set) var messageContentRevisions: [Snowflake: UInt64] = [:]
 
     private func changedChannel(_ id: Snowflake) {
         channelRevision += 1
@@ -68,6 +70,8 @@ final class DiscordStore {
     @ObservationIgnored private var channelIndex: [Snowflake: [Snowflake]] = [:]
     @ObservationIgnored private var badgeCache: [Snowflake: (revision: Int, badge: GuildBadge)] = [:]
     @ObservationIgnored private var sectionCache: [Snowflake: (revision: Int, sections: [ChannelSection])] = [:]
+    /// Every known thread of a guild by parent, most recent activity first.
+    @ObservationIgnored private var threadIndexCache: [Snowflake: [Snowflake: [Channel]]] = [:]
 
     /// Channel IDs per guild (nil key = DMs), rebuilt lazily after changes.
     private func channelIDs(in guild: Snowflake) -> [Snowflake] {
@@ -111,6 +115,7 @@ final class DiscordStore {
         onPrivacyChange?()
     }
     private func resetPeople() {
+        messageContentRevisions = [:]
         channelRevision = 0; channelRevisions = [:]
         peopleEpoch = UUID()
         onPeopleReset?()
@@ -374,7 +379,9 @@ final class DiscordStore {
     private(set) var presences: [Snowflake: PresenceStatus] = [:]
     private(set) var isReady = false
     /// Threads the current user is a member of (private threads need membership to post).
-    private(set) var joinedThreads: Set<Snowflake> = []
+    private(set) var joinedThreads: Set<Snowflake> = [] {
+        didSet { derivedRevision &+= 1 }
+    }
     /// Changes when a member search (op 8) answers, since `members` itself isn't observed.
     private(set) var memberSearchRevision = 0
 
@@ -458,7 +465,11 @@ final class DiscordStore {
         }
         let categories = all.filter { $0.type == .category }.sorted { ($0.position ?? 0, $0.id) < ($1.position ?? 0, $1.id) }
         var result: [ChannelSection] = []
-        let uncategorized = visible.filter { $0.parentID == nil && $0.type != .category }.sorted(by: sorted)
+        // Missing-parent threads still explain their activity in the sidebar.
+        // Only metadata is shown until opening resolves the parent's permissions.
+        let unresolved = channelIDs(in: guildID).compactMap { channels[$0] }
+            .filter { isUnresolvedThread($0) && canView($0) }.sorted(by: Self.threadOrder)
+        let uncategorized = visible.filter { $0.parentID == nil && $0.type != .category }.sorted(by: sorted) + unresolved
         if !uncategorized.isEmpty { result.append(ChannelSection(category: nil, channels: uncategorized)) }
         for category in categories {
             let children = visible.filter { $0.parentID == category.id && $0.type != .category }.sorted(by: sorted)
@@ -469,9 +480,117 @@ final class DiscordStore {
 
     /// Active threads under a channel the user can see.
     func threads(in parent: Snowflake) -> [Channel] {
+        _ = channels // observation dependency
         guard let guild = channels[parent]?.guildID else { return [] }
-        return channelIDs(in: guild).compactMap { channels[$0] }.filter { $0.parentID == parent && $0.type.isThread && $0.threadMetadata?.archived != true }
-            .sorted { ($0.lastMessageID ?? $0.id) > ($1.lastMessageID ?? $1.id) }
+        return (threadIndex(in: guild)[parent] ?? []).filter { $0.threadMetadata?.archived != true }
+    }
+
+    private func threadIndex(in guild: Snowflake) -> [Snowflake: [Channel]] {
+        if let cached = threadIndexCache[guild] { return cached }
+        var byParent: [Snowflake: [Channel]] = [:]
+        for id in channelIDs(in: guild) {
+            guard let channel = channels[id], channel.type.isThread, let parent = channel.parentID else { continue }
+            byParent[parent, default: []].append(channel)
+        }
+        for parent in Array(byParent.keys) { byParent[parent]?.sort(by: Self.threadOrder) }
+        threadIndexCache[guild] = byParent
+        return byParent
+    }
+
+    /// Most recent activity first; equal activity puts the newer thread first.
+    nonisolated static func threadOrder(_ a: Channel, _ b: Channel) -> Bool {
+        let x = a.lastMessageID ?? a.id, y = b.lastMessageID ?? b.id
+        return x != y ? x > y : a.id > b.id
+    }
+
+    // MARK: Sidebar channel list
+
+    /// Unread activity and mentions rolled up from a parent channel's threads.
+    struct ThreadRollup: Equatable {
+        var unreadThreads = 0
+        var mentions = 0
+        var mentionThreads = 0
+        var unread: Bool { unreadThreads > 0 }
+    }
+
+    /// One channel row of the sidebar, the thread rows drawn under it and
+    /// the rollup its own row displays.
+    struct ChannelListEntry: Identifiable {
+        var channel: Channel
+        var threads: [Channel]
+        var hiddenThreads = 0
+        var rollup = ThreadRollup()
+        var showsVoice = false
+        var id: Snowflake { channel.id }
+    }
+
+    struct ChannelListSection: Identifiable {
+        var category: Channel?
+        var collapsed: Bool
+        var entries: [ChannelListEntry]
+        var id: Snowflake { category?.id ?? 0 }
+    }
+
+    static let sidebarThreadLimit = 5
+
+    /// Unread activity the user hasn't muted, as rows draw it.
+    func showsUnread(_ channel: Channel) -> Bool { isUnread(channel) && !isMuted(channel) }
+
+    private func needsAttention(_ thread: Channel) -> Bool { showsUnread(thread) || mentionCount(thread.id) > 0 }
+
+    /// Threads the sidebar can list under a parent: every viewable active
+    /// thread, plus archived ones still carrying unread activity or mentions,
+    /// and the open one. Forum posts are threads of their forum.
+    func sidebarThreads(in parent: Snowflake, selected: Snowflake? = nil) -> [Channel] {
+        _ = channels; _ = readStates // observation dependencies
+        guard let guild = channels[parent]?.guildID else { return [] }
+        return (threadIndex(in: guild)[parent] ?? []).filter { thread in
+            guard canView(thread) else { return false }
+            return thread.threadMetadata?.archived != true || thread.id == selected || needsAttention(thread)
+        }
+    }
+
+    /// What a parent row shows for its threads. Each thread belongs to one
+    /// parent, so the server badge sums parents without counting twice.
+    func threadRollup(for parent: Snowflake) -> ThreadRollup { rollup(of: sidebarThreads(in: parent)) }
+
+    private func rollup(of threads: [Channel]) -> ThreadRollup {
+        var rollup = ThreadRollup()
+        for thread in threads {
+            if showsUnread(thread) { rollup.unreadThreads += 1 }
+            let count = mentionCount(thread.id)
+            if count > 0 { rollup.mentions += count; rollup.mentionThreads += 1 }
+        }
+        return rollup
+    }
+
+    /// The guild's sidebar rows, as ChannelList draws them. Beyond the most
+    /// recent few, a parent lists only threads needing attention until
+    /// expanded; a collapsed category keeps only what needs attention or is open.
+    func channelList(for guildID: Snowflake, collapsed: Set<Snowflake> = [], expanded: Set<Snowflake> = [],
+                     selected: Snowflake? = nil) -> [ChannelListSection] {
+        sections(for: guildID).map { section in
+            let isCollapsed = section.category.map { collapsed.contains($0.id) } ?? false
+            let entries = section.channels.compactMap { channel -> ChannelListEntry? in
+                let threads = sidebarThreads(in: channel.id, selected: selected)
+                let rollup = rollup(of: threads)
+                let attention = Set(threads.filter { $0.id == selected || needsAttention($0) }.map(\.id))
+                if isCollapsed {
+                    guard isUnread(channel) || mentionCount(channel.id) > 0 || selected == channel.id || !attention.isEmpty else { return nil }
+                    return ChannelListEntry(channel: channel, threads: threads.filter { attention.contains($0.id) }, rollup: rollup)
+                }
+                let shown: [Channel]
+                if expanded.contains(channel.id) || threads.count <= Self.sidebarThreadLimit {
+                    shown = threads
+                } else {
+                    let recent = Set(threads.prefix(Self.sidebarThreadLimit).map(\.id))
+                    shown = threads.filter { recent.contains($0.id) || attention.contains($0.id) }
+                }
+                return ChannelListEntry(channel: channel, threads: shown, hiddenThreads: threads.count - shown.count,
+                                        rollup: rollup, showsVoice: channel.type.isVoice)
+            }
+            return ChannelListSection(category: section.category, collapsed: isCollapsed, entries: entries)
+        }
     }
 
     enum SidebarItem: Identifiable, Hashable {
@@ -545,7 +664,13 @@ final class DiscordStore {
 
     func canView(_ channel: Channel) -> Bool {
         if channel.type == .category { return true }
+        if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id),
+           permissions(in: channel) & Permission.manageThreads == 0 { return false }
         return permissions(in: channel) & Permission.viewChannel != 0
+    }
+
+    func isUnresolvedThread(_ channel: Channel) -> Bool {
+        channel.type.isThread && channel.parentID.flatMap { channels[$0] } == nil
     }
 
     /// @everyone, @here and every role (not just mentionable ones) ping.
@@ -564,7 +689,7 @@ final class DiscordStore {
         guard canView(channel) else { return false }
         if channel.type.isThread, channel.threadMetadata?.archived == true || channel.threadMetadata?.locked == true { return false }
         let perms = permissions(in: channel)
-        // Private threads: only their creator or thread managers (membership isn't tracked).
+        // Private threads require membership, ownership or thread management.
         if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id),
            perms & Permission.manageThreads == 0 { return false }
         return perms & (channel.type.isThread ? Permission.sendInThreads : Permission.sendMessages) != 0
@@ -716,8 +841,19 @@ final class DiscordStore {
 
     func isUnread(_ channel: Channel) -> Bool {
         guard channel.type.isTextLike || channel.type.isForumLike, let last = channel.lastMessageID else { return false }
-        guard let state = readStates[channel.id] else { return false }
-        return last > (state.lastMessageID ?? 0)
+        guard let boundary = readBoundary(channel) else { return false }
+        return last > boundary
+    }
+
+    /// The last read message. Without a saved read state, a joined thread is
+    /// read up to when the user joined it (Discord's own guess), or its
+    /// creation if the join time is unknown. Unjoined threads and other
+    /// channels without a read state stay read, as before.
+    func readBoundary(_ channel: Channel) -> Snowflake? {
+        if let state = readStates[channel.id] { return state.lastMessageID ?? 0 }
+        guard channel.type.isThread, joinedThreads.contains(channel.id) else { return nil }
+        if let joined = channel.member?.joinTimestamp.flatMap(DiscordDate.parse) { return Snowflake.at(joined) }
+        return channel.id
     }
 
     func mentionCount(_ channel: Snowflake) -> Int { readStates[channel]?.mentionCount ?? 0 }
@@ -728,21 +864,25 @@ final class DiscordStore {
     }
 
     func badge(for guildID: Snowflake) -> GuildBadge {
-        _ = readStates; _ = channels; _ = guildSettings; _ = notificationTimeRevision // observation dependencies
+        _ = readStates; _ = channels; _ = guildSettings; _ = notificationTimeRevision; _ = joinedThreads // observation dependencies
         if let cached = badgeCache[guildID], cached.revision == derivedRevision { return cached.badge }
         let badge = computeBadge(for: guildID)
         badgeCache[guildID] = (derivedRevision, badge)
         return badge
     }
 
+    /// Exactly what the sidebar shows: each visible channel's own state plus
+    /// its thread rollup, so every rail mention traces to a row.
     private func computeBadge(for guildID: Snowflake) -> GuildBadge {
         var unread = false
         var mentions = 0
         let guildMuted = isMuted(guild: guildID)
-        for id in channelIDs(in: guildID) {
-            guard let channel = channels[id], channel.type != .category else { continue }
-            mentions += mentionCount(channel.id)
-            if !guildMuted, !unread, !isMuted(channel), isUnread(channel), canView(channel) { unread = true }
+        for section in sections(for: guildID) {
+            for channel in section.channels {
+                let rollup = threadRollup(for: channel.id)
+                mentions += mentionCount(channel.id) + rollup.mentions
+                if !guildMuted, !unread, showsUnread(channel) || rollup.unread { unread = true }
+            }
         }
         return GuildBadge(unread: unread, mentions: mentions)
     }
@@ -920,6 +1060,12 @@ final class DiscordStore {
             if channel.lastMessageID == nil { channel.lastMessageID = existing.lastMessageID }
             if channel.recipients == nil { channel.recipients = existing.recipients }
             if channel.recipientIDs == nil { channel.recipientIDs = existing.recipientIDs }
+            if channel.member == nil { channel.member = existing.member }
+            if channel.guildID == nil, !channel.type.isPrivate { channel.guildID = existing.guildID }
+        }
+        // Partial thread updates may omit guild_id; the parent knows it.
+        if channel.guildID == nil, channel.type.isThread, let parent = channel.parentID {
+            channel.guildID = channels[parent]?.guildID
         }
         channels[channel.id] = channel
         if channel.type == .dm {
@@ -933,6 +1079,18 @@ final class DiscordStore {
     /// Threads and forum posts loaded over REST join the known channels.
     func remember(threads: [Channel]) {
         for thread in threads where channels[thread.id] == nil || channels[thread.id] != thread { upsert(channel: thread) }
+    }
+
+    /// All membership event shapes merge the same current-user reference.
+    /// Missing fields keep known authority; an explicit new join replaces it.
+    private func recordThreadMembership(_ id: Snowflake, joinedAt stamp: String?) {
+        joinedThreads.insert(id)
+        guard var thread = channels[id] else { return }
+        let member = ThreadMemberRef(joinTimestamp: stamp ?? thread.member?.joinTimestamp)
+        guard thread.member != member else { return }
+        changedChannel(id)
+        thread.member = member
+        channels[id] = thread
     }
 
     func remember(messageAuthors messages: [Message]) {
@@ -1033,21 +1191,41 @@ final class DiscordStore {
             case "THREAD_LIST_SYNC":
                 let sync = try dispatch.decode(ThreadListSync.self)
                 for var thread in sync.threads {
-                    changedChannel(thread.id)
                     thread.guildID = sync.guildID
-                    channels[thread.id] = thread
-                    if thread.member != nil { joinedThreads.insert(thread.id) }
+                    upsert(channel: thread)
                 }
-                for entry in sync.members ?? [] { if let id = entry.id { joinedThreads.insert(id) } }
+                for entry in sync.members ?? [] {
+                    if let id = entry.id { recordThreadMembership(id, joinedAt: entry.joinTimestamp) }
+                }
             case "THREAD_MEMBER_UPDATE":
-                struct Mine: Decodable { var id: Snowflake? }
-                if let id = try dispatch.decode(Mine.self).id { joinedThreads.insert(id) }
+                struct Mine: Decodable {
+                    var id: Snowflake?
+                    var joinTimestamp: String?
+                    enum CodingKeys: String, CodingKey { case id; case joinTimestamp = "join_timestamp" }
+                }
+                let mine = try dispatch.decode(Mine.self)
+                if let id = mine.id {
+                    recordThreadMembership(id, joinedAt: mine.joinTimestamp)
+                }
             case "THREAD_MEMBERS_UPDATE":
                 let update = try dispatch.decode(ThreadMembersUpdate.self)
                 if let me = me?.id {
-                    if update.addedMembers?.contains(where: { $0.userID == me }) == true { joinedThreads.insert(update.id) }
-                    if update.removedMemberIDs?.contains(me) == true { joinedThreads.remove(update.id) }
+                    if let added = update.addedMembers?.first(where: { $0.userID == me }) {
+                        recordThreadMembership(update.id, joinedAt: added.joinTimestamp)
+                    }
+                    if update.removedMemberIDs?.contains(me) == true {
+                        joinedThreads.remove(update.id)
+                        if var thread = channels[update.id] {
+                            changedChannel(update.id)
+                            thread.member = nil
+                            channels[update.id] = thread
+                        }
+                    }
                 }
+            case "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK":
+                struct Changed: Decodable { var channel_id: Snowflake }
+                let channel = try dispatch.decode(Changed.self).channel_id
+                messageContentRevisions[channel, default: 0] &+= 1
             case "MESSAGE_CREATE":
                 let message = try dispatch.decode(Message.self)
                 received(message)
@@ -1112,6 +1290,7 @@ final class DiscordStore {
     }
 
     private func received(_ message: Message) {
+        let boundary = channels[message.channelID].flatMap(readBoundary)
         if var channel = channels[message.channelID] {
             changedChannel(message.channelID)
             channel.lastMessageID = message.id
@@ -1137,11 +1316,11 @@ final class DiscordStore {
         } else if (held || pendingReadChannels.contains(message.channelID) || !(message.channelID == visibleChannel && visibleIsLive)), mentionsMe(message) {
             readVersions[message.channelID, default: ReadVersion()].mentions += 1
             readVersions[message.channelID, default: ReadVersion()].mentionArrivals += 1
-            var state = readStates[message.channelID] ?? ReadState(id: message.channelID, lastMessageID: nil, mentionCount: 0)
+            var state = readStates[message.channelID] ?? ReadState(id: message.channelID, lastMessageID: boundary, mentionCount: 0)
             state.mentionCount += 1
             readStates[message.channelID] = state
         } else if message.channelID != visibleChannel, readStates[message.channelID] == nil {
-            readStates[message.channelID] = ReadState(id: message.channelID, lastMessageID: nil, mentionCount: 0)
+            readStates[message.channelID] = ReadState(id: message.channelID, lastMessageID: boundary, mentionCount: 0)
         }
         onMessageCreate?(message)
     }

@@ -555,16 +555,21 @@ final class AppModel {
         case "MESSAGE_CREATE":
             store.handle(dispatch)
         case "MESSAGE_DELETE":
+            store.handle(dispatch)
             if let deleted = try? dispatch.decode(MessageDelete.self) {
                 unreadTargetDeleted(channel: deleted.channelID, ids: [deleted.id])
             }
             messages.handle(dispatch, me: store.me?.id)
         case "MESSAGE_DELETE_BULK":
+            store.handle(dispatch)
             if let deleted = try? dispatch.decode(MessageDeleteBulk.self) {
                 unreadTargetDeleted(channel: deleted.channelID, ids: Set(deleted.ids))
             }
             messages.handle(dispatch, me: store.me?.id)
-        case "MESSAGE_UPDATE", "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE",
+        case "MESSAGE_UPDATE":
+            store.handle(dispatch)
+            messages.handle(dispatch, me: store.me?.id)
+        case "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE",
              "MESSAGE_REACTION_REMOVE_ALL", "MESSAGE_REACTION_REMOVE_EMOJI", "MESSAGE_POLL_VOTE_ADD", "MESSAGE_POLL_VOTE_REMOVE":
             messages.handle(dispatch, me: store.me?.id)
         case "VOICE_STATE_UPDATE":
@@ -607,7 +612,9 @@ final class AppModel {
         selectedGuild = guild
         if let guild {
             let remembered = lastChannelByGuild[guild].flatMap { store.channel($0) }
-            let first = store.sections(for: guild).flatMap(\.channels).first { $0.type.isTextLike && !$0.type.isVoice || $0.type.isForumLike }
+            let first = store.sections(for: guild).flatMap(\.channels).first {
+                !$0.type.isThread && (($0.type.isTextLike && !$0.type.isVoice) || $0.type.isForumLike)
+            }
             if let channel = remembered ?? first, UIDevice.current.userInterfaceIdiom == .pad || !fold.isCompact {
                 select(channel: channel.id)
             }
@@ -623,6 +630,10 @@ final class AppModel {
             store.visibleChannel = nil
             return
         }
+        if let info = store.channel(channel), store.isUnresolvedThread(info) {
+            resolveParentAndSelect(info, intent: navigationIntent)
+            return
+        }
         Perf.shared.begin("channelSwitch")
         if sheet == .servers { sheet = nil }
         if let previous = selectedChannel, previous != channel, !isMock, let timeline = messages.existingTimeline(for: previous), timeline.isAtLatest {
@@ -636,8 +647,8 @@ final class AppModel {
                 selectedGuild = nil
             }
         }
-        if unreadMarkers[channel] == nil, let state = store.readStates[channel], store.channel(channel).map(store.isUnread) == true {
-            unreadMarkers[channel] = state.lastMessageID ?? 0
+        if unreadMarkers[channel] == nil, let info = store.channel(channel), store.isUnread(info) {
+            unreadMarkers[channel] = store.readBoundary(info)
         }
         selectedChannel = channel
         lastSelectedChannel = channel
@@ -646,6 +657,40 @@ final class AppModel {
         viewingHistory = false
         subscribeVisibleGuild()
         saveNavigation()
+    }
+
+    /// A fallback thread row carries activity, but cannot imply permission to
+    /// read a missing parent's history. Resolve it before changing selection.
+    @discardableResult
+    func resolveParentAndSelect(_ thread: Channel, intent: UUID, message: Snowflake? = nil) -> Task<Void, Never> {
+        let epoch = store.readEpoch, api = api
+        guard let parentID = thread.parentID else {
+            showError("This thread's parent channel is unavailable.")
+            return Task {}
+        }
+        let revision = store.channelRevision
+        return Task { [weak self] in
+            do {
+                let parent = try await api.channel(parentID)
+                guard let self, self.store.readEpoch == epoch, self.navigationIntent == intent,
+                      ObjectIdentifier(self.api as AnyObject) == ObjectIdentifier(api as AnyObject),
+                      self.store.channel(thread.id)?.parentID == parentID else { return }
+                guard parent.id == parentID, parent.guildID == thread.guildID, !parent.type.isThread else {
+                    self.showError("This thread's parent channel could not be verified.")
+                    return
+                }
+                if !self.store.channelChanged(parentID, since: revision) { self.store.upsert(channel: parent) }
+                guard let current = self.store.channel(thread.id), !self.store.isUnresolvedThread(current), self.store.canView(current) else {
+                    self.showError("You can't view this thread's parent channel.")
+                    return
+                }
+                self.select(channel: thread.id)
+                if let message { self.revealRequest = (thread.id, message, UUID()) }
+            } catch {
+                guard let self, self.store.readEpoch == epoch, self.navigationIntent == intent else { return }
+                self.showError("Couldn't load this thread's parent channel. " + error.localizedDescription)
+            }
+        }
     }
 
     /// Unfolding to regular width with nothing open restores the last
@@ -660,11 +705,16 @@ final class AppModel {
 
     /// Jumps to a message anywhere (search, inbox, pins, notifications, links).
     func open(channel: Snowflake, message: Snowflake?) {
-        select(channel: channel)
-        if let message { revealRequest = (channel, message, UUID()) }
         sheet = nil
         // Inbox and search panels stay open beside the conversation; others close.
         if let panel = sidebarPanel, panel != .search, panel != .inbox { sidebarPanel = nil }
+        if let info = store.channel(channel), store.isUnresolvedThread(info) {
+            navigationIntent = UUID()
+            resolveParentAndSelect(info, intent: navigationIntent, message: message)
+        } else {
+            select(channel: channel)
+            if let message { revealRequest = (channel, message, UUID()) }
+        }
     }
 
     private func validateSelection() {

@@ -172,8 +172,28 @@ struct RailIcon<Content: View>: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-        .accessibilityValue(mentions > 0 ? "\(mentions) mentions" : (unread ? "Unread" : ""))
+        .accessibilityValue(BadgeAccessibility.rail(unread: unread, mentions: mentions))
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Spoken unread and mention state. Badges count mentions, not every unread
+/// message; the rail badge caps at 99+ but the spoken total stays exact.
+enum BadgeAccessibility {
+    static func mentions(_ count: Int) -> String { count == 1 ? "1 mention" : "\(count) mentions" }
+
+    static func rail(unread: Bool, mentions count: Int) -> String {
+        [unread ? "Unread" : nil, count > 0 ? mentions(count) : nil].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// A parent row speaks its own state, then what its threads add.
+    static func channel(unread: Bool, mentions own: Int, rollup: DiscordStore.ThreadRollup = .init()) -> String {
+        var parts: [String] = []
+        if unread { parts.append("unread") }
+        if rollup.unread { parts.append(rollup.unreadThreads == 1 ? "1 unread thread" : "\(rollup.unreadThreads) unread threads") }
+        let total = own + rollup.mentions
+        if total > 0 { parts.append(mentions(total) + (rollup.mentions > 0 ? ", \(rollup.mentions) in threads" : "")) }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -334,15 +354,18 @@ struct ChannelList: View {
     @Environment(DiscordStore.self) private var store
     let guildID: Snowflake
     @State private var collapsed: Set<Snowflake> = []
+    /// Parents whose full thread list is shown, beyond the most recent few.
+    @State private var expandedThreads: Set<Snowflake> = []
 
     var body: some View {
         @Bindable var model = model
         let guild = store.guilds[guildID]
         List(selection: channelSelection) {
             Section {
-                ForEach(store.sections(for: guildID)) { section in
+                ForEach(store.channelList(for: guildID, collapsed: collapsed, expanded: expandedThreads,
+                                          selected: model.selectedChannel)) { section in
                     if let category = section.category {
-                        CategoryHeader(name: category.name ?? "", collapsed: collapsed.contains(category.id)) {
+                        CategoryHeader(name: category.name ?? "", collapsed: section.collapsed) {
                             withAnimation(.snappy(duration: 0.2)) {
                                 if collapsed.contains(category.id) { collapsed.remove(category.id) } else { collapsed.insert(category.id) }
                             }
@@ -353,21 +376,24 @@ struct ChannelList: View {
                         .listRowSeparator(.hidden)
                         .selectionDisabled()
                     }
-                    let isCollapsed = section.category.map { collapsed.contains($0.id) } ?? false
-                    ForEach(section.channels) { channel in
-                        // A collapsed category still shows unread or selected channels, like Discord.
-                        if !isCollapsed || store.isUnread(channel) || model.selectedChannel == channel.id {
-                            ChannelRow(channel: channel)
-                                .tag(channel.id)
-                            if !isCollapsed, !channel.type.isForumLike {
-                                ForEach(store.threads(in: channel.id).prefix(5)) { thread in
-                                    ChannelRow(channel: thread, isThread: true)
-                                        .tag(thread.id)
-                                }
-                                if channel.type.isVoice {
-                                    VoiceParticipants(channel: channel)
+                    // A collapsed category still shows unread or selected channels, like Discord.
+                    ForEach(section.entries) { entry in
+                        ChannelRow(channel: entry.channel, isThread: entry.channel.type.isThread, rollup: entry.rollup)
+                            .tag(entry.channel.id)
+                        ForEach(entry.threads) { thread in
+                            ChannelRow(channel: thread, isThread: true)
+                                .tag(thread.id)
+                        }
+                        let expanded = expandedThreads.contains(entry.channel.id)
+                        if !section.collapsed, entry.hiddenThreads > 0 || (expanded && entry.threads.count > DiscordStore.sidebarThreadLimit) {
+                            ThreadOverflowRow(hidden: entry.hiddenThreads, expanded: expanded, parent: entry.channel.name ?? "") {
+                                withAnimation(.snappy(duration: 0.2)) {
+                                    if expanded { expandedThreads.remove(entry.channel.id) } else { expandedThreads.insert(entry.channel.id) }
                                 }
                             }
+                        }
+                        if entry.showsVoice {
+                            VoiceParticipants(channel: entry.channel)
                         }
                     }
                 }
@@ -443,10 +469,14 @@ struct ChannelRow: View {
     @Environment(DiscordStore.self) private var store
     let channel: Channel
     var isThread = false
+    /// A parent row also reflects its threads; a thread row shows only its own.
+    var rollup = DiscordStore.ThreadRollup()
 
     var body: some View {
-        let unread = store.isUnread(channel) && !store.isMuted(channel)
-        let mentions = store.mentionCount(channel.id)
+        let ownUnread = store.isUnread(channel) && !store.isMuted(channel)
+        let ownMentions = store.mentionCount(channel.id)
+        let unread = ownUnread || rollup.unread
+        let mentions = ownMentions + rollup.mentions
         let selected = model.selectedChannel == channel.id
         HStack(spacing: 8) {
             if isThread {
@@ -460,10 +490,15 @@ struct ChannelRow: View {
                     .foregroundStyle(unread || selected ? Color.textPrimary : Color.textMuted)
                     .frame(width: 20)
             }
-            Text(channel.name ?? "")
-                .font(.system(.body, weight: unread || selected ? .semibold : .regular))
-                .foregroundStyle(unread || selected ? Color.textPrimary : (store.isMuted(channel) ? Color.textMuted.opacity(0.6) : Color.textSecondary))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(channel.name ?? "")
+                    .font(.system(.body, weight: unread || selected ? .semibold : .regular))
+                    .foregroundStyle(unread || selected ? Color.textPrimary : (store.isMuted(channel) ? Color.textMuted.opacity(0.6) : Color.textSecondary))
+                    .lineLimit(1)
+                if store.isUnresolvedThread(channel) {
+                    Text("Parent channel unavailable").font(.caption).foregroundStyle(Color.textMuted)
+                }
+            }
             Spacer(minLength: 4)
             if mentions > 0 {
                 Text("\(mentions)")
@@ -490,7 +525,7 @@ struct ChannelRow: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(isThread ? "Thread" : Self.kind(for: channel)) \(channel.name ?? "")")
-        .accessibilityValue([unread ? "unread" : nil, mentions > 0 ? "\(mentions) mentions" : nil].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue(BadgeAccessibility.channel(unread: ownUnread, mentions: ownMentions, rollup: rollup))
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
         .contextMenu {
             ChannelReadButton(channel: channel.id)
@@ -499,6 +534,7 @@ struct ChannelRow: View {
         .accessibilityIdentifier("channel-\(channel.id)")
         .focusEffectDisabled()
     }
+
 
     static func symbol(for channel: Channel) -> String {
         switch channel.type {
@@ -519,6 +555,45 @@ struct ChannelRow: View {
         case .forum, .media: "Forum"
         default: "Channel"
         }
+    }
+}
+
+/// Reveals (or folds back) a parent's threads beyond the most recent few.
+struct ThreadOverflowRow: View {
+    let hidden: Int
+    let expanded: Bool
+    let parent: String
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 8) {
+                Image(systemName: expanded ? "chevron.up" : "ellipsis")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 20)
+                Text(Self.title(hidden: hidden, expanded: expanded))
+                    .font(.subheadline)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .foregroundStyle(Color.textMuted)
+            .padding(.leading, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 10))
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .selectionDisabled()
+        .accessibilityLabel(Self.accessibilityLabel(hidden: hidden, expanded: expanded, parent: parent))
+    }
+
+    static func title(hidden: Int, expanded: Bool) -> String {
+        expanded ? "Show fewer threads" : "\(hidden) more thread\(hidden == 1 ? "" : "s")"
+    }
+
+    static func accessibilityLabel(hidden: Int, expanded: Bool, parent: String) -> String {
+        expanded ? "Show fewer threads in \(parent)" : "Show \(hidden) more thread\(hidden == 1 ? "" : "s") in \(parent)"
     }
 }
 
