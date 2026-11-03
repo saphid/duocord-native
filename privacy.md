@@ -18,7 +18,7 @@ Duocord connects only to services that Discord operates or references:
 - **Images and media** load from Discord's CDN and media proxy (`cdn.discordapp.com`, `media.discordapp.net`). Some embedded media, such as animated GIF videos in link embeds, may load directly from the website named in Discord's embed data.
 - **Voice calls.** When you join a voice channel, Duocord runs Discord's own web client in a hidden, temporary web view on `discord.com`, which carries the call and its microphone audio. The web view stores nothing between calls and is removed when you leave.
 
-While you use Discord through Duocord, Discord processes your data under [Discord's Privacy Policy](https://discord.com/privacy). Discord's own login page and web client, shown inside Duocord, may send Discord their own diagnostics. Duocord doesn't control them.
+While you use Discord through Duocord, Discord processes your data under [Discord's Privacy Policy](https://discord.com/privacy). The Duocord developer operates no app-data backend. Discord and the providers used by its embedded login and voice pages process data under their own privacy policies, and Discord may keep account data and diagnostics after a request or call ends. Signing out of Duocord does not delete data held by Discord; use Discord's privacy tools to request access or deletion. Discord's own login page and web client, shown inside Duocord, may send Discord their own diagnostics. Duocord doesn't control them.
 
 Links that aren't Discord message links open in your default browser.
 
@@ -28,6 +28,8 @@ Links that aren't Discord message links open in your default browser.
 - **Caches** in the app's Caches folder, so the app opens quickly: your last session (server list and recent messages, with iOS file protection) and downloaded images. Signing out deletes the session cache. iOS may clear caches at any time.
 - **Preferences** (theme, notification toggles, recent emoji) in the app's settings storage.
 - **A local performance log** (timings, counts and channel IDs, no message text), written to the app's Documents folder. Duocord never sends it anywhere.
+
+Developer-provisioned test installs may also store a Discord login email address and password in this device's Keychain to pre-fill Discord's login page. The provisioning file is deleted after import. Sign Out removes the session token and session cache, but not this saved login, downloaded-media caches or the local performance log.
 
 Deleting the app removes these files. iOS can keep Keychain items after an app is deleted, so sign out first to remove the token.
 
