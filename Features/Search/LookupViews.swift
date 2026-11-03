@@ -236,7 +236,7 @@ struct PinsView: View {
         guard model.phase == .signedIn,
               closePanel == nil ? model.sheet == .pins : model.sidebarPanel == .pins,
               let channel = model.selectedChannel else { return nil }
-        return PinsSubmission(context: LookupContext(model: model, store: store), channel: channel)
+        return PinsSubmission.current(model: model, store: store, channel: channel)
     }
 
     private func load(_ submission: PinsSubmission?) async {

@@ -30,6 +30,12 @@ struct SearchSubmission: Equatable {
 struct PinsSubmission: Equatable {
     let context: LookupContext
     let channel: Snowflake
+    /// The channel's CHANNEL_PINS_UPDATE revision: a pin change anywhere is a new submission.
+    var revision = 0
+
+    static func current(model: AppModel, store: DiscordStore, channel: Snowflake) -> PinsSubmission {
+        PinsSubmission(context: LookupContext(model: model, store: store), channel: channel, revision: store.pinsRevision(for: channel))
+    }
 }
 
 /// The production owner used by both lookup surfaces. Async closures provide

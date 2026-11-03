@@ -84,6 +84,7 @@ final class MessageTimeline {
             return
         }
         activePageReads += 1
+        let pinReadRevision = pinRevision
         defer { finishPageRead() }
         let wasSeeded = isSeeded
         if messages.isEmpty { initialState = .loading }
@@ -91,7 +92,7 @@ final class MessageTimeline {
             let fetched = try await api.messages(channel: channelID, before: nil, after: nil, around: nil, limit: Self.pageSize)
             try Task.checkCancellation()
             guard generation == windowGeneration else { return }
-            let page = acceptedPage(fetched)
+            let page = acceptedPage(fetched, pinsSince: pinReadRevision)
             store.remember(messageAuthors: page)
             let fresh = page.sorted { $0.id < $1.id }
             initialState = .idle
@@ -129,10 +130,22 @@ final class MessageTimeline {
 
     @ObservationIgnored private var activePageReads = 0
     @ObservationIgnored private var readTombstones: Set<Snowflake> = []
+    @ObservationIgnored private var pinRevision = 0
+    /// Pin decisions made while history requests are in flight. Only reads
+    /// started before a decision need it; the final read releases the entries.
+    @ObservationIgnored private var pagePinOverrides: [Snowflake: (revision: Int, pinned: Bool)] = [:]
+
+    private func notePinAuthority(_ id: Snowflake, pinned: Bool) {
+        pinRevision &+= 1
+        if activePageReads > 0 { pagePinOverrides[id] = (pinRevision, pinned) }
+    }
 
     private func finishPageRead() {
         activePageReads -= 1
-        if activePageReads == 0 { readTombstones.removeAll() }
+        if activePageReads == 0 {
+            readTombstones.removeAll()
+            pagePinOverrides.removeAll()
+        }
     }
 
     private func visiblePage(_ page: [Message]) -> [Message] {
@@ -140,8 +153,22 @@ final class MessageTimeline {
     }
 
     /// Accept only a current response, then reconcile server-confirmed nonces.
-    private func acceptedPage(_ fetched: [Message]) -> [Message] {
-        let page = visiblePage(fetched)
+    private func acceptedPage(_ fetched: [Message], pinsSince readRevision: Int) -> [Message] {
+        var page = visiblePage(fetched)
+        // A page read while your pin is in flight may predate it: keep your
+        // intent showing, and roll back to what this read found if refused.
+        for index in page.indices {
+            let id = page[index].id
+            if let decision = pagePinOverrides[id], decision.revision > readRevision {
+                page[index].pinned = decision.pinned
+            }
+            guard let write = pendingPins[id] else { continue }
+            if let gateway = write.gateway { page[index].pinned = gateway }
+            else {
+                pendingPins[id]?.server = page[index].pinned
+                page[index].pinned = write.target
+            }
+        }
         for message in page {
             if let nonce = message.nonce, sendStates[nonce] != nil {
                 sendStates[nonce] = nil
@@ -201,12 +228,13 @@ final class MessageTimeline {
         if index(of: id) != nil { initialState = .idle; return }
         initialState = .loading
         activePageReads += 1
+        let pinReadRevision = pinRevision
         defer { finishPageRead() }
         do {
             let fetched = try await api.messages(channel: channelID, before: nil, after: nil, around: id, limit: Self.pageSize)
             try Task.checkCancellation()
             guard generation == windowGeneration else { return }
-            let page = acceptedPage(fetched)
+            let page = acceptedPage(fetched, pinsSince: pinReadRevision)
             store.remember(messageAuthors: page)
             let pending = messages.filter { isPending($0) }
             messages = page.sorted { $0.id < $1.id } + pending
@@ -229,6 +257,7 @@ final class MessageTimeline {
         let generation = windowGeneration
         loadingBefore = true
         activePageReads += 1
+        let pinReadRevision = pinRevision
         defer { finishPageRead() }
         let started = Date.now
         defer { Perf.shared.record("loadOlder", ["ms": Int(Date.now.timeIntervalSince(started) * 1000), "count": messages.count]) }
@@ -238,7 +267,7 @@ final class MessageTimeline {
             try Task.checkCancellation()
             guard generation == windowGeneration,
                   messages.first(where: { !isPending($0) })?.id == oldest else { return }
-            let page = acceptedPage(fetched)
+            let page = acceptedPage(fetched, pinsSince: pinReadRevision)
             store.remember(messageAuthors: page)
             let older = page.filter { $0.id < oldest }.sorted { $0.id < $1.id }
             hasMoreBefore = fetched.count >= Self.pageSize
@@ -257,6 +286,7 @@ final class MessageTimeline {
         let generation = windowGeneration
         loadingAfter = true
         activePageReads += 1
+        let pinReadRevision = pinRevision
         defer { finishPageRead() }
         defer { if generation == windowGeneration { loadingAfter = false } }
         do {
@@ -264,7 +294,7 @@ final class MessageTimeline {
             try Task.checkCancellation()
             guard generation == windowGeneration,
                   messages.last(where: { !isPending($0) })?.id == newest else { return }
-            let page = acceptedPage(fetched)
+            let page = acceptedPage(fetched, pinsSince: pinReadRevision)
             store.remember(messageAuthors: page)
             let newer = page.filter { $0.id > newest }.sorted { $0.id < $1.id }
             hasMoreAfter = fetched.count >= Self.pageSize
@@ -314,6 +344,12 @@ final class MessageTimeline {
 
     func update(_ update: MessageUpdate) {
         var update = update
+        if let pinned = update.pinned { notePinAuthority(update.id, pinned: pinned) }
+        // Discord's word on the pin outranks your write in flight, either way.
+        if let pinned = update.pinned, pendingPins[update.id] != nil {
+            pendingPins[update.id]?.gateway = pinned
+            pendingPins[update.id]?.server = pinned
+        }
         if var edit = edits[update.id] {
             let stale = update.editedTimestamp.map { Self.isNewerEdit(edit.server.edited, than: $0) } ?? false
             if stale {
@@ -789,7 +825,7 @@ final class MessageTimeline {
         pendingDeletes[id] = false
         let channel = channelID
         return Task {
-            defer { pendingDeletes[id] = nil }
+            defer { pendingDeletes[id] = nil; hiddenPinStates[id] = nil }
             do {
                 try await api.delete(channel: channel, message: id)
                 if activePageReads > 0 { readTombstones.insert(id) }
@@ -805,10 +841,108 @@ final class MessageTimeline {
         }
     }
 
+    /// Your pin change in flight: what you asked for, what Discord last
+    /// showed (a rollback goes back to it), and a gateway `pinned` value
+    /// received meanwhile, which outranks the write.
+    private struct PinWrite {
+        var target: Bool
+        var server: Bool
+        var gateway: Bool?
+    }
+
+    @ObservationIgnored private var pendingPins: [Snowflake: PinWrite] = [:]
+    /// Pins settled while your delete hid the row: a refused delete puts the row back with it.
+    @ObservationIgnored private var hiddenPinStates: [Snowflake: Bool] = [:]
+
+    func isChangingPin(_ id: Snowflake) -> Bool { pendingPins[id] != nil }
+
+    /// Whether `message` may be pinned or unpinned here: a confirmed,
+    /// non-system message you can see, in a channel where you may pin.
+    func canChangePin(_ message: Message, store: DiscordStore) -> Bool {
+        guard message.channelID == channelID, sendState(for: message) == nil, !message.isSystem,
+              !store.hidesBlockedMessage(message), let channel = store.channel(channelID) else { return false }
+        return store.canPin(in: channel)
+    }
+
+    /// Your pin or unpin: shown at once, then sent, unless `start` (checked
+    /// just before the request) refuses. Refused by Discord, the row goes back
+    /// to what Discord last showed, unless Discord's own update arrived
+    /// meanwhile. `result` authorizes response publication and `completion`.
+    /// Without it, a refused write may only remove its own optimistic value
+    /// while `unwindUnsent` holds, without recording response authority or
+    /// reaching `completion`. Nil when the message isn't in the window, already
+    /// is that way, or a change of its pin is in flight. Yields whether Discord
+    /// has the pin as asked.
+    @discardableResult
+    func sendPin(_ id: Snowflake, pinned: Bool, api: DiscordAPI, start: @escaping @MainActor () -> Bool = { true },
+                 result: @escaping @MainActor () -> Bool = { true },
+                 unwindUnsent: (@MainActor () -> Bool)? = nil,
+                 completion: @escaping @MainActor (Bool) -> Void = { _ in }) -> Task<Bool, Never>? {
+        guard pendingPins[id] == nil, let position = index(of: id), messages[position].pinned != pinned else { return nil }
+        pendingPins[id] = PinWrite(target: pinned, server: messages[position].pinned)
+        messages[position].pinned = pinned
+        publish(.updated([id]))
+        let channel = channelID
+        return Task {
+            defer { pendingPins[id] = nil }
+            let applied: Bool
+            var requested = false
+            if Task.isCancelled || !start() || pendingPins[id]?.gateway != nil || index(of: id) == nil {
+                // Never sent: Discord already decided, or this is no longer yours to send.
+                applied = pendingPins[id]?.gateway == pinned
+            } else {
+                requested = true
+                do {
+                    try await api.setPinned(channel: channel, message: id, pinned: pinned)
+                    applied = true
+                } catch {
+                    Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
+                        .error("pin failed: \(error.localizedDescription, privacy: .public)")
+                    // Its gateway event already arrived: Discord applied it.
+                    applied = pendingPins[id]?.gateway == pinned
+                }
+            }
+            guard let write = pendingPins[id] else { return applied }
+            // An obsolete refusal can remove this write's own optimism using
+            // the current server value, but cannot publish its response or toast.
+            if requested && !result() {
+                if !applied && (unwindUnsent?() ?? false) {
+                    settlePin(id, pinned: write.gateway ?? write.server, replacing: write.target)
+                }
+                return applied
+            }
+            // A never-sent intent can undo its own optimistic value under the
+            // caller's narrower unwind policy. A response needs full authority.
+            guard requested || (unwindUnsent?() ?? result()) else { return applied }
+            if requested { notePinAuthority(id, pinned: write.gateway ?? (applied ? write.target : write.server)) }
+            // A sent write's gateway value is authoritative. An unsent intent
+            // may only unwind the optimistic value it put on the row.
+            settlePin(id, pinned: write.gateway ?? (applied ? write.target : write.server),
+                      replacing: requested && write.gateway != nil ? nil : write.target)
+            completion(applied)
+            return applied
+        }
+    }
+
+    /// Shows the settled pin, only over the value this write put there.
+    private func settlePin(_ id: Snowflake, pinned: Bool, replacing optimistic: Bool?) {
+        guard let position = index(of: id) else {
+            if pendingDeletes[id] != nil { hiddenPinStates[id] = pinned }
+            return
+        }
+        if let optimistic, messages[position].pinned != optimistic { return }
+        guard messages[position].pinned != pinned else { return }
+        messages[position].pinned = pinned
+        publish(.updated([id]))
+    }
+
     /// Puts a message back in ID order (before pending sends), if the
     /// window still covers where it was.
     private func restore(_ message: Message) {
         guard index(of: message.id) == nil else { return }
+        var message = message
+        let settled = hiddenPinStates.removeValue(forKey: message.id)
+        if let pinned = pendingPins[message.id]?.gateway ?? settled { message.pinned = pinned }
         let confirmed = messages.filter { !isPending($0) }
         if let first = confirmed.first, message.id < first.id, hasMoreBefore { return }
         if let last = confirmed.last, message.id > last.id, hasMoreAfter { return }

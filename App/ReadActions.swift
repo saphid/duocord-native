@@ -33,6 +33,20 @@ extension AppModel {
         return enqueueRead(reads)
     }
 
+    /// Mark as Read from an alert acknowledges only through the notified
+    /// message, or the known latest if lower, so newer messages stay unread.
+    /// Nil (no write) when already read there or no latest ID is known.
+    func markAsRead(channel: Snowflake, through message: Snowflake) -> Task<Void, Never>? {
+        guard message > 0, let info = eligibleReadChannels.first(where: { $0.id == channel }),
+              let latest = info.lastMessageID, latest > 0 else { return nil }
+        let boundary = min(message, latest)
+        guard boundary > (store.readStates[channel]?.lastMessageID ?? 0) else { return nil }
+        // Capture partialness before waiting in the FIFO. A later plain
+        // arrival cannot turn a full read into a partial one.
+        return enqueueRead([ReadAcknowledgement(channel: channel, message: boundary)], cancellationSensitive: true,
+                           preservingMentions: boundary < latest)
+    }
+
     @discardableResult
     func markServerAsRead(_ guild: Snowflake) -> Task<Void, Never> {
         enqueueRead(eligibleReadChannels.filter { $0.guildID == guild }.compactMap(capturedRead), bulk: true)
@@ -70,7 +84,8 @@ extension AppModel {
     /// and gateway field versions protect newer authority; intents own feedback.
     @discardableResult
     func enqueueRead(_ reads: [ReadAcknowledgement], bulk: Bool = false,
-                     unread: Message? = nil, automatic: Bool = false) -> Task<Void, Never> {
+                     unread: Message? = nil, automatic: Bool = false, cancellationSensitive: Bool = false,
+                     preservingMentions: Bool = false) -> Task<Void, Never> {
         guard !reads.isEmpty else { return Task {} }
         guard allowsReadWrites else {
             for read in reads { readErrors[read.channel] = "Read actions are disabled for real accounts in Debug." }
@@ -104,6 +119,9 @@ extension AppModel {
                     }
                 }
             }
+            // Alert actions may be cancelled while queued behind another read.
+            // Keep ordinary reader and explicit UI actions' existing lifetime.
+            guard !cancellationSensitive || !Task.isCancelled else { return }
             if automatic {
                 // A debounce that entered the FIFO is still disposable work.
                 // Do not adopt newer authority after waiting behind another channel.
@@ -144,7 +162,7 @@ extension AppModel {
                 else { for read in resolved { try await api.acknowledge(read) } }
                 guard self.readSession == session, self.store.readEpoch == epoch else { return }
                 for read in resolved {
-                    if self.store.applyRead(read, version: versions[read.channel]!, intent: intent) {
+                    if self.store.applyRead(read, version: versions[read.channel]!, intent: intent, preservingMentions: preservingMentions) {
                         self.recordReadPresentation(read, target: unread.flatMap { self.unreadTargetOperations[intent]?.surviving($0.id) },
                                                     automatic: automatic, visit: visit)
                     }

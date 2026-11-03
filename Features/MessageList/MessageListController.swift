@@ -26,6 +26,8 @@ protocol MessageListHost: AnyObject {
     func list(edit message: Message)
     /// Deletes one of your messages (already confirmed by the reader).
     func list(delete message: Message)
+    /// Pins or unpins a message (already confirmed by the reader).
+    func list(setPinned pinned: Bool, message: Message)
     /// The quick reactions row: recently used first.
     func listQuickReactions() -> [String]
     func list(markUnread message: Message)
@@ -884,6 +886,15 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
                 actions.append(UIAction(title: "Add Reaction", image: UIImage(systemName: "face.smiling")) { [weak self] _ in
                     self?.host?.list(addReactionTo: message.id)
                 })
+                if let title = self.pinMenuTitle(for: message) {
+                    let pin = title == "Pin Message"
+                    let action = UIAction(title: title, image: UIImage(systemName: pin ? "pin" : "pin.slash")) { [weak self] _ in
+                        self?.confirmPin(message, pinned: pin)
+                    }
+                    // One change of a message's pin at a time.
+                    if self.timeline.isChangingPin(message.id) { action.attributes = .disabled }
+                    actions.append(action)
+                }
             }
             if !message.content.isEmpty {
                 actions.append(UIAction(title: "Copy Text", image: UIImage(systemName: "doc.on.doc")) { _ in
@@ -923,6 +934,33 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
             self?.host?.list(delete: message)
         })
         alert.view.accessibilityIdentifier = "confirmDelete"
+        return alert
+    }
+
+    /// "Pin Message" or "Unpin Message" for the message as the window has it
+    /// now; nil (no item) where it can't be pinned.
+    func pinMenuTitle(for message: Message) -> String? {
+        guard let current = timeline.messages.first(where: { $0.id == message.id }),
+              timeline.canChangePin(current, store: store) else { return nil }
+        return current.pinned ? "Unpin Message" : "Pin Message"
+    }
+
+    /// A pin posts a message everyone in the channel sees: confirm first.
+    func confirmPin(_ message: Message, pinned: Bool) {
+        guard viewIfLoaded?.window != nil, presentedViewController == nil else { return }
+        present(pinConfirmation(for: message, pinned: pinned), animated: true)
+    }
+
+    func pinConfirmation(for message: Message, pinned: Bool) -> UIAlertController {
+        let alert = UIAlertController(title: pinned ? "Pin Message" : "Unpin Message",
+                                      message: pinned ? "Pin this message to the channel? Everyone here will see that you pinned it."
+                                                      : "Remove this message from the channel's pins?",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: pinned ? "Pin" : "Unpin", style: pinned ? .default : .destructive) { [weak self] _ in
+            self?.host?.list(setPinned: pinned, message: message)
+        })
+        alert.view.accessibilityIdentifier = "confirmPin"
         return alert
     }
 
@@ -1128,4 +1166,8 @@ extension MessageTimeline {
         resetWindow()
         await loadLatest(api: api, store: store)
     }
+}
+
+extension ListCoordinator {
+    func list(setPinned pinned: Bool, message: Message) { model?.setPinned(pinned, message: message) }
 }

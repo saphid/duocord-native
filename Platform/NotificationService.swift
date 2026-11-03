@@ -2,6 +2,73 @@ import UIKit
 import UserNotifications
 import os
 
+/// Local message alert categories. Reply and Mark as Read both need an
+/// unlocked device and run without bringing the app forward.
+nonisolated enum MessageAlertAction {
+    static let category = "duocord.message"
+    static let readOnlyCategory = "duocord.message.readonly"
+    static let reply = "duocord.message.reply"
+    static let markRead = "duocord.message.markRead"
+
+    static var categories: Set<UNNotificationCategory> {
+        let replyAction = UNTextInputNotificationAction(identifier: reply, title: "Reply", options: [.authenticationRequired],
+                                                        textInputButtonTitle: "Send", textInputPlaceholder: "Message")
+        let readAction = UNNotificationAction(identifier: markRead, title: "Mark as Read", options: [.authenticationRequired])
+        return [UNNotificationCategory(identifier: category, actions: [replyAction, readAction], intentIdentifiers: [], options: []),
+                UNNotificationCategory(identifier: readOnlyCategory, actions: [readAction], intentIdentifiers: [], options: [])]
+    }
+}
+
+/// A notification response as plain values, so routing is testable without
+/// constructing `UNNotificationResponse`. Typed text is kept only for Reply.
+nonisolated struct NotificationActionResponse: Equatable, Sendable {
+    enum Action: Equatable, Sendable { case open, reply(String), markRead, ignore }
+    var action: Action
+    var identifier: String
+    var info: [String: String]
+
+    init(actionIdentifier: String, identifier: String, userInfo: [AnyHashable: Any], text: String? = nil) {
+        switch actionIdentifier {
+        case UNNotificationDefaultActionIdentifier: action = .open
+        case MessageAlertAction.reply: action = .reply(text ?? "")
+        case MessageAlertAction.markRead: action = .markRead
+        default: action = .ignore // dismissal and unknown identifiers neither open nor write
+        }
+        self.identifier = identifier
+        var info: [String: String] = [:]
+        for (key, value) in userInfo {
+            if let key = key as? String, let value = value as? String { info[key] = value }
+        }
+        self.info = info
+    }
+}
+
+/// This app's own local alert, required before an action writes. The current
+/// account is the authority; the posting session only scopes alert removal.
+nonisolated struct LocalAlertOrigin: Equatable, Sendable {
+    let channel: Snowflake
+    let message: Snowflake
+    let account: Snowflake
+    let session: UUID
+
+    init?(_ response: NotificationActionResponse) {
+        let info = response.info
+        func id(_ key: String) -> Snowflake? {
+            guard let raw = info[key], let value = Snowflake(raw), value.raw > 0, raw == value.description else { return nil }
+            return value
+        }
+        guard info["duocordLocal"] == "1", let channel = id("channel"), let message = id("message"),
+              let account = id("duocordAccount"), let raw = info["duocordSession"],
+              let session = UUID(uuidString: raw), raw == session.uuidString,
+              response.identifier == "msg-\(message)-\(raw)" else { return nil }
+        self.channel = channel; self.message = message; self.account = account; self.session = session
+    }
+}
+
+nonisolated enum NotificationActionOutcome: Equatable, Sendable {
+    case opened, ignored, refused, unchanged, sent, sendFailed, markedRead, readFailed
+}
+
 /// Native notifications for new messages (decided by the store's
 /// notification rules), the app icon badge, and taps that open the
 /// message's channel.
@@ -87,10 +154,20 @@ final class NotificationService: NSObject {
     private let log = Logger(subsystem: "com.saphid.duocord.native", category: "notify")
     /// Set by the app: opens a channel at a message.
     var onOpen: ((Snowflake, Snowflake) -> Void)?
+    /// Set by the app: Reply or Mark as Read for an alert of this app's own.
+    var onAction: (@MainActor (NotificationActionResponse.Action, LocalAlertOrigin) async -> NotificationActionOutcome)?
 
     func activate() {
         center.delegate = self
+        center.setNotificationCategories(MessageAlertAction.categories)
         Task { await refreshAuthorization() }
+    }
+
+    /// Reply is offered only where a send would be allowed now. A 1:1 DM with
+    /// someone now blocked takes no replies from an alert.
+    static func canQuickReply(in channel: Channel?, store: DiscordStore) -> Bool {
+        guard let channel, channel.type.isTextLike, store.canSend(in: channel) else { return false }
+        return channel.type != .dm || !store.recipients(of: channel).contains { store.isBlocked($0.id) }
     }
 
     func requestAuthorizationIfNeeded() {
@@ -148,6 +225,8 @@ final class NotificationService: NSObject {
         content.body = String(body.prefix(1000))
         content.sound = .default
         content.threadIdentifier = message.channelID.description
+        content.categoryIdentifier = Self.canQuickReply(in: channel, store: store)
+            ? MessageAlertAction.category : MessageAlertAction.readOnlyCategory
         content.userInfo = ["channel": message.channelID.description, "message": message.id.description,
                             "duocordAccount": scope.account.description,
                             "duocordSession": session.uuidString, "duocordLocal": "1"]
@@ -213,6 +292,24 @@ final class NotificationService: NSObject {
         }
     }
 
+    /// Only the default action opens. Only Reply and Mark as Read on an alert
+    /// with this app's own provenance can write; anything else does nothing.
+    @discardableResult
+    func handle(_ response: NotificationActionResponse) async -> NotificationActionOutcome {
+        switch response.action {
+        case .open:
+            guard let channel = response.info["channel"].flatMap(Snowflake.init),
+                  let message = response.info["message"].flatMap(Snowflake.init) else { return .ignored }
+            handleTap(channel: channel, message: message)
+            return .opened
+        case .ignore:
+            return .ignored
+        case .reply, .markRead:
+            guard let origin = LocalAlertOrigin(response), let onAction else { return .refused }
+            return await onAction(response.action, origin)
+        }
+    }
+
     func handleTap(channel: Snowflake, message: Snowflake) {
         pendingTap = (channel, message)
         if UIApplication.shared.applicationState == .active { flushPendingTap() }
@@ -241,9 +338,11 @@ extension NotificationService: UNUserNotificationCenterDelegate {
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let info = response.notification.request.content.userInfo
-        guard let channel = (info["channel"] as? String).flatMap(Snowflake.init),
-              let message = (info["message"] as? String).flatMap(Snowflake.init) else { return }
-        await MainActor.run { NotificationService.shared.handleTap(channel: channel, message: message) }
+        let request = response.notification.request
+        let text = response.actionIdentifier == MessageAlertAction.reply ? (response as? UNTextInputNotificationResponse)?.userText : nil
+        let value = NotificationActionResponse(actionIdentifier: response.actionIdentifier, identifier: request.identifier,
+                                               userInfo: request.content.userInfo, text: text)
+        // Awaited: the action's readiness wait is bounded by the app.
+        await handle(value)
     }
 }

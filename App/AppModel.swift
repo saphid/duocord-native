@@ -338,6 +338,7 @@ final class AppModel {
             self.notifications.clear(channel: channel, through: boundary, store: self.store)
         }
         self.store.onReadReset = { [weak self] in
+            self?.readResets &+= 1
             self?.cancelReadOperations()
             self?.ackTasks.values.forEach { $0.cancel() }
             self?.ackTasks = [:]
@@ -433,6 +434,7 @@ final class AppModel {
 
     func signIn(with credentials: SessionCredentials, persist: Bool = true) {
         guard injectedMock == nil else { return }
+        beginAccountGeneration()
         store.reset()
         messages.reset()
         if persist { SessionStore.save(credentials) }
@@ -456,6 +458,7 @@ final class AppModel {
     }
 
     func signOut() {
+        beginAccountGeneration()
         gatewayTask?.cancel()
         ackTasks.values.forEach { $0.cancel() }
         ackTasks = [:]
@@ -484,6 +487,7 @@ final class AppModel {
 
     private func startMock() {
         isMock = injectedMock == nil || injectedMockWrites
+        beginAccountGeneration()
         let mock = injectedMock ?? MockDiscord()
         api = mock
         connect(MockGateway(data: mock))
@@ -520,6 +524,7 @@ final class AppModel {
         case "MOCK_READY":
             guard let mock = api as? MockDiscord else { return }
             store.apply(ready: mock.readyPayload())
+            readyApplied()
             Perf.shared.markOnce("ready", extra: ["mock": true])
             validateSelection()
             subscribeVisibleGuild()
@@ -536,6 +541,7 @@ final class AppModel {
             let reconnect = hadReady
             hadReady = true
             store.apply(ready: ready)
+            readyApplied()
             Perf.shared.markOnce("ready", extra: ["guilds": ready.guilds.count])
             if reconnect {
                 // A new session, not a resume: events may have been missed.
@@ -745,6 +751,13 @@ final class AppModel {
     @ObservationIgnored var readSession = UUID()
     @ObservationIgnored var unreadTargetOperations: [UUID: UnreadTargetOperation] = [:]
     @ObservationIgnored var conversationVisit = UUID()
+    /// Changes with every sign-in, sign-out and mock start; fences alert actions.
+    @ObservationIgnored private(set) var accountGeneration = UUID()
+    @ObservationIgnored private var readResets = 0
+    @ObservationIgnored private var readyResetMark: Int?
+    @ObservationIgnored private var readyWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    /// How long a cold-launched alert action waits for READY.
+    @ObservationIgnored var notificationReadyTimeout: Duration = .seconds(15)
     /// Last first-visible message, reported by the list without changing its anchor.
     var firstVisibleMessages: [Snowflake: Snowflake] = [:]
 
@@ -758,36 +771,57 @@ final class AppModel {
     }
 
     func send(in channel: Snowflake, pingReply: Bool? = nil) {
-        guard var draft = drafts[channel] else { return }
+        guard let draft = drafts[channel] else { return }
         if draft.editing != nil { return saveEdit(in: channel) }
         let text = outgoingText(draft, in: channel)
         guard !text.isEmpty || !draft.attachments.isEmpty, let me = store.me else { return }
-        let ping = pingReply ?? pingReplies
+        enqueueSend(text, in: channel, author: me, replyTo: draft.replyTo, ping: pingReply ?? pingReplies, files: draft.attachments)
+        drafts[channel] = Draft()
+        lastTyping[channel] = nil
+    }
+
+    /// The pending echo, nonce, confirm and failure path shared by the composer
+    /// and alert replies. With `authority`, `start` is checked just before the
+    /// request and `result` before its outcome changes anything. The task
+    /// yields true when confirmed, false when failed, nil when not adopted.
+    @discardableResult
+    private func enqueueSend(_ text: String, in channel: Snowflake, author me: User, replyTo: Message?, ping: Bool,
+                             files attachments: [DraftAttachment],
+                             authority: (start: () -> Bool, result: () -> Bool)? = nil) -> Task<Bool?, Never> {
         let nonce = String(Snowflake.at(.now).raw + UInt64.random(in: 0..<4096))
         let timeline = timeline(for: channel)
         var echo = Message(id: Snowflake(UInt64(nonce) ?? 0), channelID: channel, guildID: store.channel(channel)?.guildID,
                            author: me, content: text, timestamp: ISO8601DateFormatter().string(from: .now),
-                           referencedMessage: draft.replyTo)
+                           referencedMessage: replyTo)
         echo.nonce = nonce
-        if draft.replyTo != nil { echo.type = 19 }
-        echo.attachments = draft.attachments.enumerated().map { index, file in
+        if replyTo != nil { echo.type = 19 }
+        echo.attachments = attachments.enumerated().map { index, file in
             Attachment(id: Snowflake(UInt64(index)), filename: file.filename, size: file.data.count, url: "about:blank",
                        proxyURL: nil, width: nil, height: nil, contentType: file.contentType, description: nil, flags: nil, durationSecs: nil)
         }
         timeline.addPending(echo)
-        outgoing[nonce] = (text, draft.replyTo, ping, draft.attachments)
-        let reply = draft.replyTo?.id
-        let files = draft.attachments.map { OutgoingAttachment(filename: $0.filename, data: $0.data, contentType: $0.contentType) }
-        draft = Draft()
-        drafts[channel] = draft
-        lastTyping[channel] = nil
-        Task { [api] in
+        outgoing[nonce] = (text, replyTo, ping, attachments)
+        let reply = replyTo?.id
+        let files = attachments.map { OutgoingAttachment(filename: $0.filename, data: $0.data, contentType: $0.contentType) }
+        return Task { [api] in
+            if let authority, Task.isCancelled || !authority.start() {
+                // Never sent. Only a still-current login removes its echo.
+                if authority.result() {
+                    self.outgoing[nonce] = nil
+                    timeline.discardPending(nonce: nonce)
+                }
+                return nil
+            }
             do {
                 let sent = try await api.send(channel: channel, content: text, replyTo: reply, pingReply: ping, attachments: files, nonce: nonce)
+                if let authority, !authority.result() { return nil }
                 timeline.confirm(nonce: nonce, with: sent)
                 self.outgoing[nonce] = nil
+                return true
             } catch {
+                if let authority, !authority.result() { return nil }
                 timeline.markFailed(nonce: nonce, error: error.localizedDescription)
+                return false
             }
         }
     }
@@ -809,6 +843,116 @@ final class AppModel {
         guard let nonce = message.nonce else { return }
         outgoing[nonce] = nil
         timeline(for: message.channelID).discardPending(nonce: nonce)
+    }
+
+    // MARK: Alert actions
+
+    /// Routes this service's Reply and Mark as Read (the app does this once
+    /// for the shared service, beside its tap handler).
+    func connectAlertActions(_ service: NotificationService) {
+        service.onAction = { [weak self] action, origin in
+            await self?.performAlertAction(action, origin: origin) ?? .refused
+        }
+    }
+
+    /// One login attempt, account and store state. Any later READY, store
+    /// reset, sign-in or sign-out changes it.
+    private struct AlertAuthority: Equatable {
+        let generation: UUID
+        let account: Snowflake
+        let resets: Int
+    }
+
+    private var currentAlertAuthority: AlertAuthority? {
+        guard store.isReady, let me = store.me else { return nil }
+        return AlertAuthority(generation: accountGeneration, account: me.id, resets: readResets)
+    }
+
+    private func beginAccountGeneration() {
+        accountGeneration = UUID()
+        let waiters = readyWaiters
+        readyWaiters = [:]
+        waiters.values.forEach { $0.resume(returning: false) }
+    }
+
+    private func readyApplied() {
+        readyResetMark = readResets
+        let waiters = readyWaiters
+        readyWaiters = [:]
+        waiters.values.forEach { $0.resume(returning: true) }
+    }
+
+    /// Ready now, or (cold launch) only this login attempt's first READY within
+    /// the bound: exactly one reset since waiting, and it was that READY's.
+    private func alertAuthority(for account: Snowflake) async -> AlertAuthority? {
+        guard !Task.isCancelled else { return nil }
+        if let authority = currentAlertAuthority { return authority.account == account ? authority : nil }
+        guard phase == .loading || phase == .signedIn else { return nil }
+        let generation = accountGeneration, resets = readResets
+        guard await waitForReady(), !Task.isCancelled, accountGeneration == generation, readResets == resets &+ 1,
+              readyResetMark == readResets, let authority = currentAlertAuthority, authority.account == account else { return nil }
+        return authority
+    }
+
+    private func waitForReady() async -> Bool {
+        let id = UUID(), timeout = notificationReadyTimeout
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            self?.finishReadyWait(id, ready: false)
+        }
+        defer { timer.cancel() }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume(returning: false) } else { readyWaiters[id] = continuation }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finishReadyWait(id, ready: false) }
+        }
+    }
+
+    private func finishReadyWait(_ id: UUID, ready: Bool) {
+        readyWaiters.removeValue(forKey: id)?.resume(returning: ready)
+    }
+
+    /// Reply sends trimmed text as a plain message through the normal pending
+    /// path; Mark as Read acknowledges through the notified message. Neither
+    /// reads or changes a draft, reply target, edit, stash or focus.
+    func performAlertAction(_ action: NotificationActionResponse.Action, origin: LocalAlertOrigin) async -> NotificationActionOutcome {
+        if case .reply(let text) = action, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .unchanged }
+        guard let authority = await alertAuthority(for: origin.account), !Task.isCancelled,
+              store.channel(origin.channel) != nil else { return .refused }
+        switch action {
+        case .reply(let text):
+            guard let me = store.me, NotificationService.canQuickReply(in: store.channel(origin.channel), store: store) else { return .refused }
+            let current = { [weak self] in
+                guard let self, self.currentAlertAuthority == authority else { return false }
+                return NotificationService.canQuickReply(in: self.store.channel(origin.channel), store: self.store)
+            }
+            let sameLogin = { [weak self] in self?.accountGeneration == authority.generation && self?.store.me?.id == authority.account }
+            let sent = enqueueSend(text.trimmingCharacters(in: .whitespacesAndNewlines), in: origin.channel, author: me, replyTo: nil,
+                                   ping: pingReplies, files: [], authority: (start: current, result: sameLogin))
+            let result = await withTaskCancellationHandler {
+                await sent.value
+            } onCancel: {
+                sent.cancel()
+            }
+            switch result {
+            case true?: return .sent
+            case false?: return .sendFailed
+            case nil: return .refused
+            }
+        case .markRead:
+            guard let read = markAsRead(channel: origin.channel, through: origin.message) else { return .unchanged }
+            await withTaskCancellationHandler {
+                await read.value
+            } onCancel: {
+                read.cancel()
+            }
+            guard !Task.isCancelled else { return .refused }
+            return currentAlertAuthority == authority && readErrors[origin.channel] == nil ? .markedRead : .readFailed
+        case .open, .ignore:
+            return .ignored
+        }
     }
 
     // MARK: Your messages
@@ -870,6 +1014,43 @@ final class AppModel {
         Task {
             if await request.value == false { showError("Couldn't delete message") }
         }
+    }
+
+    /// Only concrete mock sessions pin in DEBUG; a real account is refused
+    /// before anything is shown or sent.
+    var allowsPinWrites: Bool {
+        #if DEBUG
+        isMock && api is MockDiscord
+        #else
+        !(api is OfflineAPI)
+        #endif
+    }
+
+    /// Pins or unpins (after the list's confirmation) the message as it is
+    /// now in the window, not as the menu saw it: nothing happens when it is
+    /// already that way. Shown at once; sent only if this login, store epoch
+    /// and permission still hold when the request starts; put back with an
+    /// error if Discord refuses it. Nil when nothing was started.
+    @discardableResult
+    func setPinned(_ pinned: Bool, message: Message) -> Task<Bool, Never>? {
+        guard allowsPinWrites else {
+            showError("Pinning is disabled for real accounts in Debug.")
+            return nil
+        }
+        let id = message.id, channel = message.channelID
+        guard let authority = currentAlertAuthority, let timeline = messages.existingTimeline(for: channel),
+              let current = timeline.messages.first(where: { $0.id == id }),
+              current.pinned != pinned, timeline.canChangePin(current, store: store) else { return nil }
+        let api = api
+        let sameLogin = { [weak self] in self?.accountGeneration == authority.generation && self?.store.me?.id == authority.account }
+        return timeline.sendPin(id, pinned: pinned, api: api, start: { [weak self] in
+            guard let self, self.currentAlertAuthority == authority, self.allowsPinWrites,
+                  self.messages.existingTimeline(for: channel) === timeline,
+                  let row = timeline.messages.first(where: { $0.id == id }) else { return false }
+            return timeline.canChangePin(row, store: self.store)
+        }, result: { [weak self] in self?.currentAlertAuthority == authority }, unwindUnsent: sameLogin, completion: { [weak self] applied in
+            if !applied { self?.showError(pinned ? "Couldn't pin message" : "Couldn't unpin message") }
+        })
     }
 
     // MARK: Autocomplete

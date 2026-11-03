@@ -110,6 +110,8 @@ nonisolated protocol DiscordAPI: Sendable {
     /// Replaces the text of one of your messages; returns the edited message.
     func edit(channel: Snowflake, message: Snowflake, content: String) async throws -> Message
     func delete(channel: Snowflake, message: Snowflake) async throws
+    /// Pins (`pinned`) or unpins a message. Discord posts a system message for a pin.
+    func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws
     func ack(channel: Snowflake, message: Snowflake) async throws
     func acknowledge(_ read: ReadAcknowledgement) async throws
     func acknowledgeBulk(_ reads: [ReadAcknowledgement]) async throws
@@ -275,6 +277,12 @@ actor DiscordREST: DiscordAPI {
 
     func delete(channel: Snowflake, message: Snowflake) async throws {
         _ = try await raw("DELETE", "channels/\(channel)/messages/\(message)", body: nil, route: "delete:\(channel)")
+    }
+
+    /// The documented `messages/pins` route (never the deprecated `pins/{id}`
+    /// one). No body; Discord answers 204 with an empty body.
+    func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws {
+        _ = try await raw(pinned ? "PUT" : "DELETE", "channels/\(channel)/messages/pins/\(message)", body: nil, route: "pin:\(channel)")
     }
 
     /// The web client's upload flow: reserve upload URLs, PUT each file, then
@@ -546,4 +554,5 @@ extension DiscordAPI {
     func relationship(user: Snowflake, action: RelationshipAction) async throws { throw DiscordError.unauthorized }
     func requestFriend(username: FriendUsername) async throws { throw DiscordError.unauthorized }
     func createDM(recipient: Snowflake) async throws -> Channel { throw DiscordError.unauthorized }
+    func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws { throw DiscordError.unauthorized }
 }

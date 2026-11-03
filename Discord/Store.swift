@@ -11,6 +11,8 @@ nonisolated enum Permission {
     static let connect: UInt64 = 1 << 20
     static let sendInThreads: UInt64 = 1 << 38
     static let manageThreads: UInt64 = 1 << 34
+    /// Split from Manage Messages; since 2026-02-23 that alone no longer pins.
+    static let pinMessages: UInt64 = 1 << 51
     static let all: UInt64 = .max
 }
 
@@ -252,7 +254,7 @@ final class DiscordStore {
     }
 
     @discardableResult
-    func applyRead(_ read: ReadAcknowledgement, version: ReadVersion, intent: UUID) -> Bool {
+    func applyRead(_ read: ReadAcknowledgement, version: ReadVersion, intent: UUID, preservingMentions: Bool = false) -> Bool {
         guard let record = readEchoes[read.channel]?.last(where: { $0.intent == intent }),
               !record.superseded,
               record.sequence >= confirmedReadSequences[read.channel, default: 0] else { return false }
@@ -269,7 +271,9 @@ final class DiscordStore {
                 if let merged = manualMentionCount(count, captured: version, current: current) { state.mentionCount = merged }
             } else if current.mentions == version.mentions {
                 if let count = read.mentionCount { state.mentionCount = count }
-                else if !read.manual { state.mentionCount = 0 }
+                // Only an alert already partial when queued needs to keep an
+                // unknown remaining count. Mention versions fence new arrivals.
+                else if !read.manual, !preservingMentions { state.mentionCount = 0 }
             }
         }
         readStates[read.channel] = state
@@ -566,6 +570,33 @@ final class DiscordStore {
         return perms & (channel.type.isThread ? Permission.sendInThreads : Permission.sendMessages) != 0
     }
 
+    /// Pin Messages (not Manage Messages) where you can see the channel; an
+    /// archived or locked thread takes no changes. DMs have no permissions to check.
+    func canPin(in channel: Channel) -> Bool {
+        guard canView(channel) else { return false }
+        if channel.type.isThread, channel.threadMetadata?.archived == true || channel.threadMetadata?.locked == true { return false }
+        return permissions(in: channel) & Permission.pinMessages != 0
+    }
+
+    // MARK: Pins
+
+    /// Per channel, bumped by CHANNEL_PINS_UPDATE: an open Pins view reloads.
+    private(set) var pinsRevisions: [Snowflake: Int] = [:]
+
+    func pinsRevision(for channel: Snowflake) -> Int { pinsRevisions[channel, default: 0] }
+
+    /// A full replacement starts a new store epoch; old revisions mean nothing in it.
+    private func resetPins() { pinsRevisions = [:] }
+
+    private func applyPinsUpdate(_ update: ChannelPinsUpdate) {
+        // Explicit null: no pins remain. Omitted: unknown, keep what is known.
+        if update.timestampProvided, var channel = channels[update.channelID], channel.lastPinTimestamp != update.lastPinTimestamp {
+            channel.lastPinTimestamp = update.lastPinTimestamp
+            channels[update.channelID] = channel
+        }
+        pinsRevisions[update.channelID, default: 0] &+= 1
+    }
+
     // MARK: Unread and mentions
 
     // One deadline for every mute, rather than timers attached to rows.
@@ -749,6 +780,7 @@ final class DiscordStore {
     func reset() {
         resetPeople()
         resetReadOperations()
+        resetPins()
         settingsSnapshotVersion &+= 1
         settingsVersions = [:]
         me = nil; guilds = [:]; guildOrder = []; folders = []; channels = [:]; privateChannelOrder = []
@@ -761,6 +793,7 @@ final class DiscordStore {
         guard !isReady else { return }
         resetPeople()
         resetReadOperations()
+        resetPins()
         settingsSnapshotVersion &+= 1
         settingsVersions = [:]
         me = snapshot.me
@@ -780,6 +813,7 @@ final class DiscordStore {
         resetPeople()
         presences = [:]
         resetReadOperations()
+        resetPins()
         readServerFloor = ready.readStateVersion
         settingsSnapshotVersion &+= 1
         settingsVersions = [:]
@@ -1020,6 +1054,8 @@ final class DiscordStore {
             case "MESSAGE_ACK":
                 let ack = try dispatch.decode(MessageAck.self)
                 applyReadEcho(ack)
+            case "CHANNEL_PINS_UPDATE":
+                applyPinsUpdate(try dispatch.decode(ChannelPinsUpdate.self))
             case "TYPING_START":
                 let event = try dispatch.decode(TypingStart.self)
                 typing[event.channelID, default: [:]][event.userID] = .now

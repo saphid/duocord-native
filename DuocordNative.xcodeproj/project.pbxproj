@@ -21,6 +21,7 @@
 		1B66B7143B5E43E3E43FACF7 /* Fold.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31593A6148043095D19461D /* Fold.swift */; };
 		200C9DBF693708FA6EE43553 /* Gateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06ADE4F042C4D6CDC834916C /* Gateway.swift */; };
 		21C1F50777C8B6DDE7F32E3A /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F86BE2EC9529F1F14E481684 /* MainView.swift */; };
+		22EDF91F889884DF1C8757BE /* ComposerPasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A42E042A2B3A7056CFEB077 /* ComposerPasteTests.swift */; };
 		24125FADA40D9EE9AF2AABE9 /* Perf.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C69BF8F40C6D17A3FE7E0F /* Perf.swift */; };
 		244A0577A6211A0076D9079A /* ReactionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954FF028B06B2726844F3749 /* ReactionViews.swift */; };
 		291D21A8A4E0E9F5F2606436 /* MessageBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E00DA28AEABE9189E51C51F /* MessageBuilder.swift */; };
@@ -158,6 +159,7 @@
 		444E1DEFC4F9354FB3E754C1 /* AnimatedMediaRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedMediaRecoveryTests.swift; sourceTree = "<group>"; };
 		4505994E33B86B909CC9ECCA /* LoginSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginSheet.swift; sourceTree = "<group>"; };
 		48DE257A0072A9BC8F8166B3 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
+		4A42E042A2B3A7056CFEB077 /* ComposerPasteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerPasteTests.swift; sourceTree = "<group>"; };
 		4A74470812F13DA1650803B4 /* DeliveredNotificationReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveredNotificationReadTests.swift; sourceTree = "<group>"; };
 		4AD620C6310C90622BDB7450 /* VoiceActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActivityController.swift; sourceTree = "<group>"; };
 		4BA0630B78FE2DFCC58AA3DC /* Relationships.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Relationships.swift; sourceTree = "<group>"; };
@@ -369,6 +371,7 @@
 				444E1DEFC4F9354FB3E754C1 /* AnimatedMediaRecoveryTests.swift */,
 				178D31213B6F6561697AD563 /* AnimatedMediaTests.swift */,
 				FC55D75BA2903F86EA423CFF /* AutocompleteTests.swift */,
+				4A42E042A2B3A7056CFEB077 /* ComposerPasteTests.swift */,
 				FF32F9FB18BDA01DC4B70E2D /* ContentConcealmentTests.swift */,
 				50BDC3005CA5B465EDC497C2 /* ContentParityTests.swift */,
 				C0651A3730AC0C72E2F92165 /* CoreTests.swift */,
@@ -651,6 +654,7 @@
 				0BE7A183940E696028F05136 /* AnimatedMediaRecoveryTests.swift in Sources */,
 				90576F5C0C13D8EFE878D713 /* AnimatedMediaTests.swift in Sources */,
 				384349E354AB0623F4C5A079 /* AutocompleteTests.swift in Sources */,
+				22EDF91F889884DF1C8757BE /* ComposerPasteTests.swift in Sources */,
 				15EB48CDA481223E2DEA3223 /* ContentConcealmentTests.swift in Sources */,
 				7CAC99F5DEC43F81BFDDA9D5 /* ContentParityTests.swift in Sources */,
 				30A7CD8E5C01205286AD4D01 /* CoreTests.swift in Sources */,

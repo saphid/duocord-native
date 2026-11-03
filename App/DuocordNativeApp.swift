@@ -12,6 +12,7 @@ struct DuocordNativeApp: App {
         // (No web views are created here: they must wait for the window.)
         let model = AppModel()
         NotificationService.shared.onOpen = { [model] channel, message in model.open(channel: channel, message: message) }
+        model.connectAlertActions(NotificationService.shared)
         model.start()
         _model = State(initialValue: model)
     }

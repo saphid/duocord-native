@@ -69,10 +69,10 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                               roles: [Role(id: guildID, name: "@everyone", color: 0, position: 0, permissions: String(Permission.viewChannel | Permission.sendMessages | Permission.readHistory | Permission.connect)),
                                       Role(id: Snowflake(guildID.raw + 900), name: "Moderators", color: 0x3BA55C, position: 2, hoist: true),
                                       // You're a Designer: in the first server that lets you
-                                      // mention everyone (and every role); elsewhere only
+                                      // mention everyone (and every role) and pin; elsewhere only
                                       // mentionable roles appear in autocomplete.
                                       Role(id: Snowflake(guildID.raw + 901), name: "Designers", color: 0xEB459E, position: 1,
-                                           permissions: gIndex == 0 ? String(Permission.mentionEveryone) : "0", hoist: true, mentionable: true),
+                                           permissions: gIndex == 0 ? String(Permission.mentionEveryone | Permission.pinMessages) : "0", hoist: true, mentionable: true),
                                       Role(id: Snowflake(guildID.raw + 902), name: "Night Shift", color: 0xFAA61A, position: 3)],
                               channels: channels)
             guild.memberCount = 1200 + gIndex * 37
@@ -346,7 +346,13 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     }
 
     func pins(channel: Snowflake) async throws -> [Message] {
-        Array(history(for: channel).filter { !$0.content.isEmpty }.enumerated().filter { $0.offset % 97 == 3 }.map(\.element).prefix(8))
+        let all = history(for: channel)
+        let derived = Array(all.filter { !$0.content.isEmpty }.enumerated().filter { $0.offset % 97 == 3 }.map(\.element).prefix(8))
+        let (overrides, order) = lock.withLock { (pinOverrides[channel] ?? [:], pinOrder[channel] ?? []) }
+        guard !overrides.isEmpty else { return derived }
+        // Newest pin first, then the generated ones nobody changed.
+        let added = order.compactMap { id in all.first { $0.id == id } }
+        return added + derived.filter { overrides[$0.id] == nil }
     }
 
     func search(guild: Snowflake?, channel: Snowflake?, query: String, offset: Int) async throws -> SearchResult {
@@ -441,7 +447,19 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         #endif
     }
 
+    #if DEBUG
+    private var sendHook: (@Sendable (SentRecord) async throws -> Void)?
+    /// Offline tests: runs as a send starts; may hold it or throw to fail it.
+    var beforeSend: (@Sendable (SentRecord) async throws -> Void)? {
+        get { lock.withLock { sendHook } }
+        set { lock.withLock { sendHook = newValue } }
+    }
+    #endif
+
     func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String) async throws -> Message {
+        #if DEBUG
+        if let beforeSend { try await beforeSend(SentRecord(channel: channel, content: content, replyTo: replyTo, pingReply: pingReply)) }
+        #endif
         try await Task.sleep(for: .milliseconds(300))
         // `-DuocordMockSendFail YES`: every send fails (the failed-echo menu).
         try failIfAsked("DuocordMockSendFail")
@@ -513,6 +531,56 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         guard removed else { throw DiscordError.http(403, "Missing Permissions") }
         struct Deleted: Encodable { var id: Snowflake; var channel_id: Snowflake; var guild_id: Snowflake? }
         emit("MESSAGE_DELETE", Deleted(id: message, channel_id: channel, guild_id: guildID(for: channel)))
+    }
+
+    /// A pin write as asked for (recorded before any hook or refusal).
+    struct PinRecord: Equatable, Sendable {
+        var channel: Snowflake
+        var message: Snowflake
+        var pinned: Bool
+    }
+    private var pinRecords: [PinRecord] = []
+    var pinOperations: [PinRecord] { lock.withLock { pinRecords } }
+    /// Per channel: messages pinned (true) or unpinned (false) by writes, over the generated pins.
+    private var pinOverrides: [Snowflake: [Snowflake: Bool]] = [:]
+    /// Per channel: written pins, newest first, with when they were pinned.
+    private var pinOrder: [Snowflake: [Snowflake]] = [:]
+    private var pinTimes: [Snowflake: String] = [:]
+    #if DEBUG
+    private var pinHook: (@Sendable (PinRecord) async throws -> Void)?
+    /// Offline tests: runs as a pin write starts; may hold it or throw to refuse it.
+    var beforePin: (@Sendable (PinRecord) async throws -> Void)? {
+        get { lock.withLock { pinHook } }
+        set { lock.withLock { pinHook = newValue } }
+    }
+    #endif
+
+    /// Pins as Discord does: CHANNEL_PINS_UPDATE, deliberately no MESSAGE_UPDATE
+    /// (the app must not depend on one).
+    func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws {
+        let record = PinRecord(channel: channel, message: message, pinned: pinned)
+        lock.withLock { pinRecords.append(record) }
+        #if DEBUG
+        if let hook = lock.withLock({ pinHook }) { try await hook(record) }
+        #endif
+        try await Task.sleep(for: .milliseconds(200))
+        try failIfAsked("DuocordMockWriteFail")
+        guard let target = history(for: channel).first(where: { $0.id == message }) else { throw DiscordError.http(404, "Unknown Message") }
+        guard !target.isSystem else { throw DiscordError.http(400, "Cannot execute action on a system message") }
+        let now = ISO8601DateFormatter().string(from: .now)
+        let latest: String? = lock.withLock {
+            if let index = histories[channel]?.firstIndex(where: { $0.id == message }) { histories[channel]?[index].pinned = pinned }
+            pinOverrides[channel, default: [:]][message] = pinned
+            pinOrder[channel, default: []].removeAll { $0 == message }
+            if pinned { pinOrder[channel, default: []].insert(message, at: 0); pinTimes[message] = now } else { pinTimes[message] = nil }
+            return pinOrder[channel]?.first.flatMap { pinTimes[$0] }
+        }
+        let remaining = try await pins(channel: channel)
+        var event: [String: JSONValue] = ["channel_id": .string(channel.description)]
+        if let guild = guildID(for: channel) { event["guild_id"] = .string(guild.description) }
+        // Null when no pins remain; omitted when only generated (untimed) pins do.
+        if let latest { event["last_pin_timestamp"] = .string(latest) } else if remaining.isEmpty { event["last_pin_timestamp"] = .null }
+        emit("CHANNEL_PINS_UPDATE", event)
     }
 
     struct PeopleRecord: Sendable {

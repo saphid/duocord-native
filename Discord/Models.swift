@@ -574,6 +574,29 @@ nonisolated struct Message: Codable, Hashable, Sendable, Identifiable {
 }
 
 /// A partial message from MESSAGE_UPDATE: only present fields change.
+/// CHANNEL_PINS_UPDATE. It names no message, and is not sent when a pinned
+/// message is deleted. A null timestamp (no pins left) differs from an omitted one.
+nonisolated struct ChannelPinsUpdate: Decodable, Sendable {
+    var guildID: Snowflake?
+    var channelID: Snowflake
+    var lastPinTimestamp: String?
+    var timestampProvided: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case guildID = "guild_id"
+        case channelID = "channel_id"
+        case lastPinTimestamp = "last_pin_timestamp"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guildID = try c.decodeIfPresent(Snowflake.self, forKey: .guildID)
+        channelID = try c.decode(Snowflake.self, forKey: .channelID)
+        timestampProvided = c.contains(.lastPinTimestamp)
+        lastPinTimestamp = try c.decodeIfPresent(String.self, forKey: .lastPinTimestamp)
+    }
+}
+
 nonisolated struct MessageUpdate: Decodable, Sendable {
     var id: Snowflake
     var channelID: Snowflake
