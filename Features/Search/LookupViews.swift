@@ -230,26 +230,20 @@ struct PinsView: View {
         lookup.invalidate()
         if let closePanel { closePanel() } else { dismiss() }
     }
-    @State private var lookup = LookupRequestState<PinsSubmission, [Message]>()
+    @State private var lookup = OtherListState<PinsListIdentity, Message, String>()
+    @State private var presentationID = UUID()
 
-    private var submission: PinsSubmission? {
-        guard model.phase == .signedIn,
-              closePanel == nil ? model.sheet == .pins : model.sidebarPanel == .pins,
-              let channel = model.selectedChannel else { return nil }
-        return PinsSubmission.current(model: model, store: store, channel: channel)
+    private var submission: PinsListIdentity? {
+        PinsListIdentity.current(model: model, store: store, presentation: presentationID, sidebar: closePanel != nil)
     }
 
-    private func load(_ submission: PinsSubmission?) async {
+    private func load(_ submission: PinsListIdentity?) async {
         guard !Task.isCancelled else { return }
         guard let submission else { lookup.invalidate(); return }
-        let api = model.api
-        let request = lookup.start(submission, load: { try await api.pins(channel: submission.channel) },
-                                   isCurrent: { self.submission == submission })
-        await withTaskCancellationHandler {
-            await request.value
-        } onCancel: {
-            request.cancel()
-        }
+        let api = model.api, targetStore = store
+        let request = OtherListConsumers.pins(lookup, input: submission, api: api, channel: submission.pins.channel,
+                                              store: targetStore, isCurrent: { self.submission == submission })
+        await withTaskCancellationHandler { await request.value } onCancel: { request.cancel() }
     }
 
     var body: some View {
@@ -258,13 +252,18 @@ struct PinsView: View {
                 let snapshot = lookup.snapshot(for: submission)
                 if case .failed(let error) = snapshot.status {
                     ContentUnavailableView("Couldn't Load Pins", systemImage: "pin.slash", description: Text(error))
-                } else if let pins = snapshot.value {
+                    Button("Retry Pins") { Task { await load(submission) } }
+                } else if snapshot.status == .done {
+                    let pins = snapshot.rows
                     if pins.isEmpty {
                         ContentUnavailableView("No Pinned Messages", systemImage: "pin", description: Text("Pinned messages in this channel appear here."))
                     }
                     ForEach(pins) { MessageResultRow(message: $0, showChannel: false) }
-                    Text("This view loads one page of pins, requesting up to 50. More pins may exist; older pages cannot be loaded here.")
-                        .font(.footnote).foregroundStyle(Color.textMuted)
+                    if let accepted = snapshot.input {
+                        LookupPagingControls(progress: snapshot.more,
+                                             loadMore: { lookup.loadMore(accepted) },
+                                             reload: { Task { await load(submission) } })
+                    }
                 } else if submission != nil {
                     ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
                 } else {
@@ -279,7 +278,7 @@ struct PinsView: View {
             .task(id: submission) { await load(submission) }
             .refreshable { await load(submission) }
         }
-        .onDisappear { lookup.invalidate() }
+        .onDisappear { lookup.invalidate(); presentationID = UUID() }
         .presentationDetents([.medium, .large])
     }
 }

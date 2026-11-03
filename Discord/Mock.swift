@@ -347,12 +347,47 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
 
     func pins(channel: Snowflake) async throws -> [Message] {
         let all = history(for: channel)
-        let derived = Array(all.filter { !$0.content.isEmpty }.enumerated().filter { $0.offset % 97 == 3 }.map(\.element).prefix(8))
+        let derived = generatedPins(all, channel: channel)
         let (overrides, order) = lock.withLock { (pinOverrides[channel] ?? [:], pinOrder[channel] ?? []) }
         guard !overrides.isEmpty else { return derived }
         // Newest pin first, then the generated ones nobody changed.
         let added = order.compactMap { id in all.first { $0.id == id } }
         return added + derived.filter { overrides[$0.id] == nil }
+    }
+
+    /// Eight generated pins per channel; the `DuocordMockManyPins` debug launch
+    /// argument gives the general channel over 100 so paging can be seen offline.
+    private func generatedPins(_ all: [Message], channel: Snowflake) -> [Message] {
+        let candidates = all.filter { !$0.content.isEmpty }.enumerated()
+        #if DEBUG
+        if channel == Self.generalChannel, UserDefaults.standard.bool(forKey: "DuocordMockManyPins") {
+            return candidates.filter { $0.offset % 15 == 3 }.map(\.element)
+        }
+        #endif
+        return Array(candidates.filter { $0.offset % 97 == 3 }.map(\.element).prefix(8))
+    }
+
+    /// Discord's paged pins: newest first, `before` an exact earlier `pinned_at`.
+    /// Written pins keep the time they were pinned; generated ones get fixed
+    /// past times, one second apart, older than any write.
+    func pinPage(channel: Snowflake, before: String?, limit: Int) async throws -> PinPage {
+        try await Task.sleep(for: .milliseconds(120))
+        let pins = try await pins(channel: channel)
+        let times = lock.withLock { pinTimes }
+        let formatter = ISO8601DateFormatter()
+        var generated = 0
+        let items = pins.map { message -> PinPage.Item in
+            if let time = times[message.id] { return PinPage.Item(message: message, pinnedAt: time) }
+            defer { generated += 1 }
+            return PinPage.Item(message: message, pinnedAt: formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000 - Double(generated))))
+        }
+        var remaining = items[...]
+        if let before {
+            guard let cutoff = formatter.date(from: before) else { throw DiscordError.http(400, "Invalid Form Body") }
+            remaining = remaining.drop { item in item.pinnedAt.flatMap(formatter.date(from:)).map { $0 >= cutoff } ?? true }
+        }
+        let size = min(max(limit, 1), 50)
+        return PinPage(items: Array(remaining.prefix(size)), hasMore: remaining.count > size)
     }
 
     func search(guild: Snowflake?, channel: Snowflake?, query: String, offset: Int) async throws -> SearchResult {

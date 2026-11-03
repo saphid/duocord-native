@@ -29,6 +29,21 @@ struct OtherListIdentity: Equatable {
     }
 }
 
+/// The Pins list: the shared list identity plus the channel's pins revision,
+/// so a channel, account, session or CHANNEL_PINS_UPDATE change (including
+/// your own Pin/Unpin) is a new list that starts again from the newest pin.
+struct PinsListIdentity: Equatable {
+    let list: OtherListIdentity
+    let pins: PinsSubmission
+
+    static func current(model: AppModel, store: DiscordStore, presentation: UUID, sidebar: Bool) -> Self? {
+        guard let channel = model.selectedChannel,
+              let list = OtherListIdentity.current(model: model, store: store, route: .pins,
+                                                   presentation: presentation, sidebar: sidebar) else { return nil }
+        return Self(list: list, pins: .current(model: model, store: store, channel: channel))
+    }
+}
+
 struct OtherListPage<Row, Cursor> {
     var rows: [Row]
     var consumed: Int
@@ -208,6 +223,20 @@ enum OtherListConsumers {
     }
 }
 
+extension OtherListConsumers {
+    /// 50 pins a page; the cursor is the last row's `pinned_at`, as received.
+    static func pins<I>(_ owner: OtherListState<I, Message, String>, input: I, api: DiscordAPI,
+                        channel: Snowflake, store: DiscordStore, isCurrent: @escaping @MainActor () -> Bool,
+                        fetch: (@MainActor (String?) async throws -> PinPage)? = nil) -> Task<Void, Never> {
+        owner.start(input, load: { before in
+            let page: PinPage
+            if let fetch { page = try await fetch(before) }
+            else { page = try await api.pinPage(channel: channel, before: before, limit: 50) }
+            return OtherListPages.pins(page, channel: channel, before: before)
+        }, isCurrent: isCurrent, publish: { store.remember(messageAuthors: $0) })
+    }
+}
+
 enum InboxLists {
     static func unreadChannels(store: DiscordStore) -> [Channel] {
         store.channels.values.filter { channel in
@@ -284,6 +313,24 @@ enum OtherListPages {
         var fraction = part(7)
         while fraction.last == "0" { fraction.removeLast() }
         return ArchiveTimestamp(seconds: seconds, fraction: fraction)
+    }
+
+    /// A continuation needs every `pinned_at` valid, newest first, and its
+    /// last one strictly older than `before`; otherwise the list stops there.
+    static func pins(_ page: PinPage, channel: Snowflake, before: String?) -> OtherListPage<Message, String> {
+        let rows = page.items.map(\.message).filter { $0.channelID == channel }
+        let next = page.items.last?.pinnedAt
+        var problem: String?
+        if page.hasMore {
+            let dates = page.items.compactMap { $0.pinnedAt.flatMap(archiveDate) }
+            if dates.count != page.items.count || dates.isEmpty ||
+                zip(dates, dates.dropFirst()).contains(where: { $0 < $1 }) {
+                problem = "The pin cursor was missing, invalid or unordered. Reload Results to try again."
+            } else if let before, !(archiveDate(before).map { dates.last! < $0 } ?? false) {
+                problem = "The pin cursor did not advance. Reload Results to try again."
+            }
+        }
+        return OtherListPage(rows: rows, consumed: page.items.count, next: next, hasMore: page.hasMore, problem: problem)
     }
 
     static func isArchive(_ row: Channel, parent: Channel) -> Bool {

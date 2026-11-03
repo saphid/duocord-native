@@ -97,6 +97,14 @@ struct DetailColumn: View {
                 EmptyChatView()
             }
         }
+        // With the sidebar hidden, the system's Show Sidebar control sits in
+        // the title bar; minimised on scroll it would take the only way back
+        // to the sidebar (and the title) with it.
+        .toolbarMinimizationBehavior(revealsSidebarFromBar ? .never : .automatic, for: .navigationBar)
+    }
+
+    private var revealsSidebarFromBar: Bool {
+        !fold.isCompact && !model.isTableTop && model.columnVisibility == .detailOnly
     }
 }
 

@@ -57,6 +57,22 @@ nonisolated struct ArchivedThreadPage: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case threads; case hasMore = "has_more" }
 }
 
+/// One page of `GET channels/{id}/messages/pins`: newest pin first, each
+/// with the `pinned_at` string Discord sent, plus whether older pins remain.
+/// `pinned_at` is kept exactly as received; it is the next page's `before`.
+nonisolated struct PinPage: Decodable, Sendable {
+    nonisolated struct Item: Decodable, Sendable {
+        var message: Message
+        /// Optional so a page can still be shown; a continuation without it is rejected.
+        var pinnedAt: String?
+        enum CodingKeys: String, CodingKey { case message; case pinnedAt = "pinned_at" }
+    }
+    var items: [Item]
+    /// Required: a page that omits it is a decoding failure, never a false end.
+    var hasMore: Bool
+    enum CodingKeys: String, CodingKey { case items; case hasMore = "has_more" }
+}
+
 nonisolated struct OutgoingAttachment: Sendable {
     var filename: String
     var data: Data
@@ -99,7 +115,10 @@ nonisolated enum DiscordError: Error, LocalizedError {
 /// implementations conform; nothing else talks to the network directly.
 nonisolated protocol DiscordAPI: Sendable {
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message]
+    /// The first page of pins only (up to 50). Lists use `pinPage`.
     func pins(channel: Snowflake) async throws -> [Message]
+    /// One page of pins older than `before` (a `pinned_at` string, sent as received).
+    func pinPage(channel: Snowflake, before: String?, limit: Int) async throws -> PinPage
     func search(guild: Snowflake?, channel: Snowflake?, query: String, offset: Int) async throws -> SearchResult
     func mentions(limit: Int, before: Snowflake?) async throws -> [Message]
     func forumThreads(channel: Snowflake, offset: Int) async throws -> ThreadSearchResult
@@ -140,6 +159,12 @@ extension Emoji {
 extension DiscordAPI {
     func publicArchivedThreads(channel: Snowflake, before: String?) async throws -> ArchivedThreadPage {
         throw DiscordError.decoding("Public archived-thread paging is unavailable for this transport")
+    }
+
+    /// Older transports without paging: their one list is a complete, final page.
+    func pinPage(channel: Snowflake, before: String?, limit: Int) async throws -> PinPage {
+        guard before == nil else { return PinPage(items: [], hasMore: false) }
+        return PinPage(items: try await pins(channel: channel).map { PinPage.Item(message: $0, pinnedAt: nil) }, hasMore: false)
     }
 }
 
@@ -193,14 +218,29 @@ actor DiscordREST: DiscordAPI {
     }
 
     func pins(channel: Snowflake) async throws -> [Message] {
-        struct Page: Decodable {
-            struct Item: Decodable { var message: Message }
-            var items: [Item]
+        try await pinPage(channel: channel, before: nil, limit: 50).items.map(\.message)
+    }
+
+    /// Discord's generic body for a route it does not serve (JSON code 0),
+    /// as opposed to e.g. "Unknown Channel" (code 10003) for a real 404.
+    nonisolated static let unknownRouteMessage = "404: Not Found"
+
+    /// Every failure of the paged route (401, 403, 429 after the usual GET
+    /// retries, 5xx, decoding, transport) is surfaced. The only fallback is
+    /// the first page when Discord says the paged route itself does not exist
+    /// (404 "404: Not Found"): then the deprecated `channels/{id}/pins` list,
+    /// which returns every pin of the channel at once, is a complete final page.
+    func pinPage(channel: Snowflake, before: String?, limit: Int) async throws -> PinPage {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if let before { query.append(URLQueryItem(name: "before", value: before)) }
+        do {
+            return try await request("GET", "channels/\(channel)/messages/pins", query: query, body: nil,
+                                     route: "pins:\(channel)", strictQuery: true)
+        } catch DiscordError.http(404, let message) where before == nil && message == Self.unknownRouteMessage {
+            log.notice("paged pins route unavailable; using the legacy pins list")
+            let legacy: [Message] = try await get("channels/\(channel)/pins", route: "pins:\(channel)")
+            return PinPage(items: legacy.map { PinPage.Item(message: $0, pinnedAt: nil) }, hasMore: false)
         }
-        if let page: Page = try? await get("channels/\(channel)/messages/pins", query: [URLQueryItem(name: "limit", value: "50")], route: "pins:\(channel)") {
-            return page.items.map(\.message)
-        }
-        return try await get("channels/\(channel)/pins", route: "pins:\(channel)")
     }
 
     func search(guild: Snowflake?, channel: Snowflake?, query: String, offset: Int) async throws -> SearchResult {
@@ -418,10 +458,16 @@ actor DiscordREST: DiscordAPI {
 
     /// `path` is already percent-encoded (IDs, fixed words, and segments such
     /// as `Emoji.reactionPathSegment`); it is appended as is, never encoded twice.
-    nonisolated static func url(base: URL, path: String, query: [URLQueryItem] = []) -> URL {
+    /// `strictQuery` also percent-encodes "+" in values (URLComponents leaves
+    /// it bare, and servers decode a bare "+" as a space), so an opaque cursor
+    /// such as "2026-11-02T11:22:33.123000+00:00" arrives exactly as received.
+    nonisolated static func url(base: URL, path: String, query: [URLQueryItem] = [], strictQuery: Bool = false) -> URL {
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)!
         components.percentEncodedPath += "/" + path
         if !query.isEmpty { components.queryItems = query }
+        if strictQuery, let encoded = components.percentEncodedQuery {
+            components.percentEncodedQuery = encoded.replacingOccurrences(of: "+", with: "%2B")
+        }
         return components.url!
     }
 
@@ -430,8 +476,8 @@ actor DiscordREST: DiscordAPI {
     }
 
     private func request<T: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [],
-                                       body: [String: JSONValue]?, route: String) async throws -> T {
-        let data = try await raw(method, path, query: query, body: body, route: route)
+                                       body: [String: JSONValue]?, route: String, strictQuery: Bool = false) async throws -> T {
+        let data = try await raw(method, path, query: query, body: body, route: route, strictQuery: strictQuery)
         do {
             return try decoder.decode(T.self, from: data.isEmpty ? Data("null".utf8) : data)
         } catch {
@@ -441,8 +487,8 @@ actor DiscordREST: DiscordAPI {
     }
 
     private func raw(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: JSONValue]?,
-                     route: String) async throws -> Data {
-        var request = URLRequest(url: Self.url(base: base, path: path, query: query))
+                     route: String, strictQuery: Bool = false) async throws -> Data {
+        var request = URLRequest(url: Self.url(base: base, path: path, query: query, strictQuery: strictQuery))
         request.httpMethod = method
         request.setValue(credentials.token, forHTTPHeaderField: "Authorization")
         if let body {

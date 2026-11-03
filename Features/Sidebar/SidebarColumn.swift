@@ -32,7 +32,7 @@ struct SidebarColumn: View {
             .frame(maxWidth: .infinity)
             .background(Color.sidebarBackground)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { UserPanel() }
+        .safeAreaInset(edge: .bottom, spacing: 0) { UserPanel().homeIndicatorClearance() }
         .padding(.trailing, hingeWidth)
         .background(Color.railBackground.ignoresSafeArea())
         .animation(.snappy(duration: 0.25), value: showsMembersHere)

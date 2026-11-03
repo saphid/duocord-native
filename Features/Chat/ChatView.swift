@@ -37,7 +37,7 @@ struct ChatView: View {
                     MessageListView(channel: channel)
                         .ignoresSafeArea(.container, edges: .top)
                         .safeAreaInset(edge: .top, spacing: 0) { UnreadNavigationBar(channel: channel.id) }
-                        .safeAreaInset(edge: .bottom, spacing: 0) { ChatControls(channel: channel) }
+                        .safeAreaInset(edge: .bottom, spacing: 0) { ChatControls(channel: channel).homeIndicatorClearance() }
                 }
             }
         }
