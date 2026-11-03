@@ -1,0 +1,1240 @@
+import Foundation
+import Observation
+import os
+
+nonisolated enum Permission {
+    static let administrator: UInt64 = 1 << 3
+    static let viewChannel: UInt64 = 1 << 10
+    static let sendMessages: UInt64 = 1 << 11
+    static let readHistory: UInt64 = 1 << 16
+    static let mentionEveryone: UInt64 = 1 << 17
+    static let connect: UInt64 = 1 << 20
+    static let sendInThreads: UInt64 = 1 << 38
+    static let manageThreads: UInt64 = 1 << 34
+    static let all: UInt64 = .max
+}
+
+/// One row of the lazily loaded member list.
+enum MemberListRow: Hashable, Identifiable {
+    case group(id: String, title: String, count: Int)
+    case member(Member, PresenceStatus)
+
+    var id: String {
+        switch self {
+        case .group(let id, _, _): "g-\(id)"
+        case .member(let member, _): "m-\(member.userID?.description ?? member.user?.id.description ?? "?")"
+        }
+    }
+}
+
+struct MemberListState {
+    var id: String
+    /// Slots by Discord's logical index; nil = not loaded / invalidated.
+    var slots: [MemberListRow?] = []
+    var rows: [MemberListRow] { slots.compactMap { $0 } }
+    var memberCount: Int = 0
+    var onlineCount: Int = 0
+}
+
+/// Everything Duocord knows about the account, updated from READY and
+/// gateway dispatches. Main actor; views observe it directly.
+@Observable
+final class DiscordStore {
+    private(set) var me: User?
+    private(set) var guilds: [Snowflake: Guild] = [:] {
+        didSet { derivedRevision &+= 1 }
+    }
+    private(set) var guildOrder: [Snowflake] = []
+    private(set) var folders: [GuildFolder] = []
+    private(set) var channels: [Snowflake: Channel] = [:] {
+        didSet { channelIndexValid = false; derivedRevision &+= 1 }
+    }
+    /// Bumped when anything badges or sections depend on changes.
+    @ObservationIgnored private var derivedRevision = 0
+    @ObservationIgnored private var channelIndexValid = false
+    @ObservationIgnored private(set) var channelRevision = 0
+    @ObservationIgnored private var channelRevisions: [Snowflake: Int] = [:]
+
+    private func changedChannel(_ id: Snowflake) {
+        channelRevision += 1
+        channelRevisions[id] = channelRevision
+    }
+
+    func channelChanged(_ id: Snowflake, since revision: Int) -> Bool {
+        channelRevisions[id, default: 0] > revision
+    }
+    @ObservationIgnored private var channelIndex: [Snowflake: [Snowflake]] = [:]
+    @ObservationIgnored private var badgeCache: [Snowflake: (revision: Int, badge: GuildBadge)] = [:]
+    @ObservationIgnored private var sectionCache: [Snowflake: (revision: Int, sections: [ChannelSection])] = [:]
+
+    /// Channel IDs per guild (nil key = DMs), rebuilt lazily after changes.
+    private func channelIDs(in guild: Snowflake) -> [Snowflake] {
+        if !channelIndexValid {
+            var index: [Snowflake: [Snowflake]] = [:]
+            for channel in channels.values { index[channel.guildID ?? 0, default: []].append(channel.id) }
+            channelIndex = index
+            channelIndexValid = true
+        }
+        return channelIndex[guild] ?? []
+    }
+    private(set) var privateChannelOrder: [Snowflake] = []
+    private(set) var users: [Snowflake: User] = [:]
+    private(set) var relationships: [Snowflake: Relationship] = [:]
+    private(set) var peopleEpoch = UUID()
+    private(set) var privacyRevision: UInt64 = 0
+    private(set) var revealedBlockedMessages: Set<Snowflake> = []
+    @ObservationIgnored private var relationshipVersions: [Snowflake: UInt64] = [:]
+    @ObservationIgnored private(set) var relationshipGeneration: UInt64 = 0
+    @ObservationIgnored private var relationshipGenerations: [Snowflake: UInt64] = [:]
+    @ObservationIgnored private var personFields: [Snowflake: [String: JSONValue]] = [:]
+    @ObservationIgnored private var usernameVersions: [String: UInt64] = [:]
+    @ObservationIgnored private var dmVersions: [Snowflake: UInt64] = [:]
+    @ObservationIgnored var onPeopleReset: (() -> Void)?
+    @ObservationIgnored var onPrivacyChange: (() -> Void)?
+
+    func relationshipVersion(_ id: Snowflake) -> UInt64 { relationshipVersions[id, default: 0] }
+    /// Latest relationship-event generation associated with this name.
+    func usernameVersion(_ name: String) -> UInt64 { usernameVersions[name, default: 0] }
+    func dmVersion(_ id: Snowflake) -> UInt64 { dmVersions[id, default: 0] }
+    func isBlocked(_ id: Snowflake) -> Bool { relationships[id]?.type == 2 }
+    func hidesBlockedMessage(_ message: Message) -> Bool {
+        isBlocked(message.author.id) && !revealedBlockedMessages.contains(message.id)
+    }
+    func revealBlockedMessage(_ id: Snowflake) {
+        guard revealedBlockedMessages.insert(id).inserted else { return }
+        privacyChanged()
+    }
+    private func privacyChanged() {
+        privacyRevision &+= 1
+        onPrivacyChange?()
+    }
+    private func resetPeople() {
+        channelRevision = 0; channelRevisions = [:]
+        peopleEpoch = UUID()
+        onPeopleReset?()
+        relationships = [:]; relationshipVersions = [:]; personFields = [:]; dmVersions = [:]; usernameVersions = [:]
+        relationshipGeneration = 0; relationshipGenerations = [:]
+        revealedBlockedMessages = []
+        privacyChanged()
+    }
+
+    /// Merge only present, well-typed profile fields. A user ID alone never
+    /// invents a username or borrows a different user's identity.
+    func remember(person fields: [String: JSONValue], id: Snowflake, fromGateway: Bool = false) {
+        guard let raw = fields["id"],
+              let actual = try? JSONDecoder().decode(Snowflake.self, from: JSONEncoder().encode(raw)), actual == id else { return }
+        let oldUsername = users[id]?.username
+        var base = personFields[id] ?? [:]
+        if let known = users[id], let data = try? JSONEncoder().encode(known),
+           let encoded = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
+            base = base.merging(encoded, uniquingKeysWith: { _, new in new })
+        }
+        for (key, value) in fields {
+            switch (key, value) {
+            case ("id", _), ("username", .string), ("global_name", .string), ("global_name", .null),
+                 ("avatar", .string), ("avatar", .null), ("discriminator", .string), ("discriminator", .null),
+                 ("bot", .bool), ("bot", .null): base[key] = value
+            default: break
+            }
+        }
+        personFields[id] = base
+        if let data = try? JSONEncoder().encode(base), let user = try? JSONDecoder().decode(User.self, from: data) {
+            users[id] = user
+            // Associate a gateway-supplied name with its relationship event,
+            // even if another path has already populated the user cache.
+            // Resolving an old event never creates newer request authority.
+            if fromGateway, case .string(let name) = fields["username"], name == user.username,
+               let generation = relationshipGenerations[id] {
+                for associated in Set([oldUsername, name].compactMap { $0 }) {
+                    usernameVersions[associated] = max(usernameVersions[associated, default: 0], generation)
+                }
+            }
+        }
+    }
+    func remember(person user: User) {
+        guard let data = try? JSONEncoder().encode(user),
+              let fields = try? JSONDecoder().decode([String: JSONValue].self, from: data) else { return }
+        remember(person: fields, id: user.id)
+    }
+    func applyRelationship(_ update: Relationship, remove: Bool = false) {
+        let wasBlocked = isBlocked(update.id)
+        let oldUsername = users[update.id]?.username
+        relationshipVersions[update.id, default: 0] &+= 1
+        relationshipGeneration &+= 1
+        relationshipGenerations[update.id] = relationshipGeneration
+        if let fields = update.userFields { remember(person: fields, id: update.id) }
+        for name in Set([oldUsername, users[update.id]?.username].compactMap { $0 }) {
+            usernameVersions[name] = max(usernameVersions[name, default: 0], relationshipGeneration)
+        }
+        if remove { relationships[update.id] = nil }
+        else { relationships[update.id] = relationships[update.id]?.merging(update) ?? update }
+        if wasBlocked != isBlocked(update.id) {
+            // Reblocking hides even previously revealed rows.
+            revealedBlockedMessages = []
+            privacyChanged()
+        }
+    }
+    func confirmRelationship(_ id: Snowflake, action: RelationshipAction, version: UInt64) {
+        guard relationshipVersion(id) == version else { return }
+        let update = Relationship(id: id, type: action.resultingType ?? 0)
+        applyRelationship(update, remove: action.resultingType == nil)
+    }
+    func friends(_ filter: FriendsFilter) -> [Relationship] {
+        relationships.values.filter { relation in
+            switch filter {
+            case .all: relation.type == 1
+            case .online: relation.type == 1 && presences[relation.id] != nil && presences[relation.id] != .offline && presences[relation.id] != .invisible
+            case .pending: relation.type == 3 || relation.type == 4
+            case .blocked: relation.type == 2
+            }
+        }.sorted {
+            let a = users[$0.id]?.displayName.lowercased() ?? ""
+            let b = users[$1.id]?.displayName.lowercased() ?? ""
+            return a == b ? $0.id < $1.id : a < b
+        }
+    }
+    func directMessage(to id: Snowflake) -> Channel? {
+        privateChannels.first { channel in
+            guard channel.type == .dm else { return false }
+            let ids = channel.recipients.map { $0.map(\.id) } ?? channel.recipientIDs ?? []
+            return ids.count == 1 && ids.first == id
+        }
+    }
+
+    private(set) var myMembers: [Snowflake: Member] = [:] {
+        didSet { derivedRevision &+= 1 }
+    }
+    @ObservationIgnored private(set) var members: [Snowflake: [Snowflake: Member]] = [:]
+    private(set) var readStates: [Snowflake: ReadState] = [:] {
+        didSet { derivedRevision &+= 1 }
+    }
+    /// A fresh READY/cache/reset fences every outstanding read operation.
+    private(set) var readEpoch = UUID()
+    private(set) var manualUnreadChannels: Set<Snowflake> = []
+    @ObservationIgnored var pendingReadChannels: Set<Snowflake> = []
+    @ObservationIgnored var pendingUnreadChannels: Set<Snowflake> = []
+    @ObservationIgnored var readIntents: [Snowflake: UUID] = [:]
+    @ObservationIgnored var onReadReset: (() -> Void)?
+    /// Emitted only by accepted boundary-owning branches, after state publication.
+    /// Manual unread and mention-only updates deliberately own no alert removal.
+    @ObservationIgnored var onAcceptedRead: ((Snowflake, Snowflake) -> Void)?
+    @ObservationIgnored private var readEchoes: [Snowflake: [ReadEchoRecord]] = [:]
+    @ObservationIgnored private var readWriteSequence = 0
+    @ObservationIgnored private var confirmedReadSequences: [Snowflake: Int] = [:]
+    @ObservationIgnored private var readServerVersions: [Snowflake: Int] = [:]
+    @ObservationIgnored private var readServerFloor: Int?
+    @ObservationIgnored private var readVersions: [Snowflake: ReadVersion] = [:]
+
+    func readVersion(_ channel: Snowflake) -> ReadVersion { readVersions[channel] ?? ReadVersion() }
+
+    private func resetReadOperations() {
+        onReadReset?()
+        readEpoch = UUID()
+        readEchoes = [:]; readServerVersions = [:]; readServerFloor = nil
+        readWriteSequence = 0; confirmedReadSequences = [:]
+        manualUnreadChannels = []; pendingReadChannels = []; pendingUnreadChannels = []; readIntents = [:]; readVersions = [:]
+    }
+
+    func resumeAutomaticReading(_ channel: Snowflake) {
+        manualUnreadChannels.remove(channel)
+    }
+
+    func registerReadEcho(_ read: ReadAcknowledgement, intent: UUID, releasesHold: Bool) {
+        var entries = readEchoes[read.channel] ?? []
+        readWriteSequence += 1
+        entries.append(ReadEchoRecord(read: read, intent: intent, sequence: readWriteSequence,
+                                      releasesHold: releasesHold, capturedVersion: readVersion(read.channel)))
+        readEchoes[read.channel] = Array(entries.suffix(32))
+    }
+
+    func readWasEchoed(_ channel: Snowflake, intent: UUID) -> Bool {
+        readEchoes[channel]?.last(where: { $0.intent == intent && !$0.superseded })?.seen == true
+    }
+
+    @discardableResult
+    func applyRead(_ read: ReadAcknowledgement, version: ReadVersion, intent: UUID) -> Bool {
+        guard let record = readEchoes[read.channel]?.last(where: { $0.intent == intent }),
+              !record.superseded,
+              record.sequence >= confirmedReadSequences[read.channel, default: 0] else { return false }
+        confirmedReadSequences[read.channel] = record.sequence
+        var state = readStates[read.channel] ?? ReadState(id: read.channel, lastMessageID: nil, mentionCount: 0)
+        let current = readVersion(read.channel)
+        if current.boundary == version.boundary {
+            state.lastMessageID = read.manual ? read.message : max(read.message, state.lastMessageID ?? 0)
+            if read.manual { manualUnreadChannels.insert(read.channel) }
+            else { manualUnreadChannels.remove(read.channel) }
+        }
+        if current.boundary == version.boundary || state.lastMessageID == read.message {
+            if read.manual, let count = read.mentionCount {
+                if let merged = manualMentionCount(count, captured: version, current: current) { state.mentionCount = merged }
+            } else if current.mentions == version.mentions {
+                if let count = read.mentionCount { state.mentionCount = count }
+                else if !read.manual { state.mentionCount = 0 }
+            }
+        }
+        readStates[read.channel] = state
+        if !read.manual, current.boundary == version.boundary, let boundary = state.lastMessageID {
+            onAcceptedRead?(read.channel, boundary)
+        }
+        return true
+    }
+
+    private func manualMentionCount(_ count: Int, captured: ReadVersion, current: ReadVersion) -> Int? {
+        let arrivals = current.mentionArrivals - captured.mentionArrivals
+        // Only arrivals may be merged. A partial count update or later read
+        // is independent authority and keeps its value.
+        guard arrivals >= 0, current.mentions - captured.mentions == arrivals else { return nil }
+        return max(0, count) > Int.max - arrivals ? Int.max : max(0, count) + arrivals
+    }
+
+    private func applyReadEcho(_ ack: MessageAck) {
+        guard ack.ackType == nil || ack.ackType == 0 else { return }
+        if let version = ack.version {
+            if let previous = readServerVersions[ack.channelID] ?? readServerFloor, version <= previous { return }
+            readServerVersions[ack.channelID] = version
+        }
+        var releasesHold = false
+        var localEcho: ReadEchoRecord?
+        if let id = ack.messageID, var entries = readEchoes[ack.channelID],
+           let index = entries.lastIndex(where: { $0.read.message == id && $0.read.manual == (ack.manual == true) }) {
+            let known = entries[index]
+            if known.superseded {
+                // The channel version check already rejected older versions.
+                // A new version may reuse this boundary; a versionless old echo may not.
+                guard ack.version != nil else { return }
+            } else {
+                entries[index].seen = true
+                entries[index].version = ack.version
+                readEchoes[ack.channelID] = entries
+                // Without correlation IDs, repeated versionless fingerprints
+                // conservatively belong to the recorded local operation.
+                if known.sequence < confirmedReadSequences[ack.channelID, default: 0],
+                   !known.seen || ack.version == nil || (ack.version ?? 0) <= (known.version ?? 0) { return }
+                if !known.seen || ack.version == nil || known.version == nil { localEcho = known }
+                releasesHold = known.releasesHold
+                confirmedReadSequences[ack.channelID] = max(known.sequence, confirmedReadSequences[ack.channelID, default: 0])
+            }
+        }
+        // Distinct, accepted versioned authority from another client supersedes
+        // a local hold. Known obsolete local fingerprints were rejected above.
+        if ack.version != nil, ack.messageID != nil, ack.manual != true, localEcho == nil { releasesHold = true }
+        var state = readStates[ack.channelID] ?? ReadState(id: ack.channelID, lastMessageID: nil, mentionCount: 0)
+        var version = readVersion(ack.channelID)
+        let previousBoundaryVersion = version.boundary
+        // An automatic/late echo cannot undo a deliberate unread hold. Manual
+        // gateway updates can lower boundaries; omitted fields own nothing.
+        let held = manualUnreadChannels.contains(ack.channelID) && !releasesHold
+        if let id = ack.messageID, ack.manual == true || !held {
+            if localEcho == nil, var entries = readEchoes[ack.channelID] {
+                // Accepted external boundary authority fences both completed
+                // and in-flight local writes registered before this event.
+                for index in entries.indices { entries[index].superseded = true }
+                readEchoes[ack.channelID] = entries
+            }
+            if ack.manual == true {
+                state.lastMessageID = id
+                manualUnreadChannels.insert(ack.channelID)
+            } else {
+                state.lastMessageID = max(id, state.lastMessageID ?? 0)
+                if releasesHold { manualUnreadChannels.remove(ack.channelID) }
+            }
+            version.boundary += 1
+        }
+        if let count = ack.mentionCount, !held || ack.manual == true {
+            // A captured ack must not consume a mention received beyond it.
+            if ack.manual == true || count != 0 || ack.messageID == nil || ack.messageID.map({ (channels[ack.channelID]?.lastMessageID ?? 0) <= $0 }) == true {
+                if ack.manual == true, let localEcho, localEcho.read.mentionCount == count {
+                    if let merged = manualMentionCount(count, captured: localEcho.capturedVersion, current: version) {
+                        state.mentionCount = merged
+                        version.mentions += 1
+                    }
+                } else {
+                    state.mentionCount = max(0, count)
+                    version.mentions += 1
+                }
+            }
+        }
+        readVersions[ack.channelID] = version
+        readStates[ack.channelID] = state
+        if version.boundary != previousBoundaryVersion, ack.manual != true, let boundary = state.lastMessageID {
+            onAcceptedRead?(ack.channelID, boundary)
+        }
+    }
+
+    private(set) var guildSettings: [Snowflake: UserGuildSettings] = [:] {
+        didSet { derivedRevision &+= 1; scheduleMuteExpiry() }
+    }
+    private(set) var voiceStates: [Snowflake: [Snowflake: VoiceState]] = [:]
+    private(set) var typing: [Snowflake: [Snowflake: Date]] = [:]
+    private(set) var memberLists: [Snowflake: MemberListState] = [:]
+    private(set) var presences: [Snowflake: PresenceStatus] = [:]
+    private(set) var isReady = false
+    /// Threads the current user is a member of (private threads need membership to post).
+    private(set) var joinedThreads: Set<Snowflake> = []
+    /// Changes when a member search (op 8) answers, since `members` itself isn't observed.
+    private(set) var memberSearchRevision = 0
+
+    @ObservationIgnored private let log = Logger(subsystem: "com.saphid.duocord.native", category: "store")
+    /// The channel on screen. Its new messages only skip the mention count
+    /// while the reader is actually at its newest messages with the app active.
+    @ObservationIgnored var visibleChannel: Snowflake?
+    @ObservationIgnored var visibleIsLive = false
+    @ObservationIgnored var onMessageCreate: ((Message) -> Void)?
+
+    // MARK: Lookups
+
+    func channel(_ id: Snowflake) -> Channel? { channels[id] }
+
+    func member(_ user: Snowflake, in guild: Snowflake?) -> Member? {
+        guard let guild else { return nil }
+        if user == me?.id { return myMembers[guild] }
+        return members[guild]?[user]
+    }
+
+    func displayName(for user: User, in guild: Snowflake?) -> String {
+        member(user.id, in: guild)?.nick?.nonEmpty ?? user.displayName
+    }
+
+    func role(_ id: Snowflake, in guild: Snowflake?) -> Role? {
+        guild.flatMap { guilds[$0]?.roles.first { $0.id == id } }
+    }
+
+    /// The colour of a member's highest coloured role, if any.
+    func roleColor(for user: Snowflake, in guild: Snowflake?) -> Int? {
+        guard let guild, let roles = member(user, in: guild)?.roles, let all = guilds[guild]?.roles else { return nil }
+        return all.filter { roles.contains($0.id) && $0.color != 0 }.max { $0.position < $1.position }?.color
+    }
+
+    func roleColor(for member: Member, in guild: Snowflake) -> Int? {
+        guard let all = guilds[guild]?.roles else { return nil }
+        return all.filter { member.roles.contains($0.id) && $0.color != 0 }.max { $0.position < $1.position }?.color
+    }
+
+    func channelName(_ channel: Channel) -> String {
+        if channel.type.isPrivate { return dmName(channel) }
+        return channel.name ?? "unknown"
+    }
+
+    func dmName(_ channel: Channel) -> String {
+        if let name = channel.name?.nonEmpty { return name }
+        let names = recipients(of: channel).map(\.displayName)
+        return names.isEmpty ? "Direct Message" : names.joined(separator: ", ")
+    }
+
+    func recipients(of channel: Channel) -> [User] {
+        if let recipients = channel.recipients, !recipients.isEmpty { return recipients }
+        return (channel.recipientIDs ?? []).compactMap { users[$0] }
+    }
+
+    // MARK: Sidebar structure
+
+    struct ChannelSection: Identifiable {
+        var category: Channel?
+        var channels: [Channel]
+        var id: Snowflake { category?.id ?? 0 }
+    }
+
+    /// Visible channels grouped under categories in Discord's order.
+    func sections(for guildID: Snowflake) -> [ChannelSection] {
+        _ = channels // observation dependency
+        if let cached = sectionCache[guildID], cached.revision == derivedRevision { return cached.sections }
+        let result = computeSections(for: guildID)
+        sectionCache[guildID] = (derivedRevision, result)
+        return result
+    }
+
+    private func computeSections(for guildID: Snowflake) -> [ChannelSection] {
+        let all = channelIDs(in: guildID).compactMap { channels[$0] }.filter { !$0.type.isThread }
+        let visible = all.filter { canView($0) }
+        let sorted: (Channel, Channel) -> Bool = { a, b in
+            let av = a.type.isVoice ? 1 : 0, bv = b.type.isVoice ? 1 : 0
+            if av != bv { return av < bv }
+            if (a.position ?? 0) != (b.position ?? 0) { return (a.position ?? 0) < (b.position ?? 0) }
+            return a.id < b.id
+        }
+        let categories = all.filter { $0.type == .category }.sorted { ($0.position ?? 0, $0.id) < ($1.position ?? 0, $1.id) }
+        var result: [ChannelSection] = []
+        let uncategorized = visible.filter { $0.parentID == nil && $0.type != .category }.sorted(by: sorted)
+        if !uncategorized.isEmpty { result.append(ChannelSection(category: nil, channels: uncategorized)) }
+        for category in categories {
+            let children = visible.filter { $0.parentID == category.id && $0.type != .category }.sorted(by: sorted)
+            if !children.isEmpty { result.append(ChannelSection(category: category, channels: children)) }
+        }
+        return result
+    }
+
+    /// Active threads under a channel the user can see.
+    func threads(in parent: Snowflake) -> [Channel] {
+        guard let guild = channels[parent]?.guildID else { return [] }
+        return channelIDs(in: guild).compactMap { channels[$0] }.filter { $0.parentID == parent && $0.type.isThread && $0.threadMetadata?.archived != true }
+            .sorted { ($0.lastMessageID ?? $0.id) > ($1.lastMessageID ?? $1.id) }
+    }
+
+    enum SidebarItem: Identifiable, Hashable {
+        case guild(Snowflake)
+        case folder(GuildFolder)
+        var id: String {
+            switch self {
+            case .guild(let id): "g\(id)"
+            case .folder(let folder): "f\(folder.id ?? 0)-\(folder.guildIDs.first?.description ?? "")"
+            }
+        }
+    }
+
+    /// Server rail items: folders from settings, then any guild not in one.
+    var sidebarItems: [SidebarItem] {
+        var placed = Set<Snowflake>()
+        var items: [SidebarItem] = []
+        for folder in folders {
+            let ids = folder.guildIDs.filter { guilds[$0] != nil }
+            guard !ids.isEmpty else { continue }
+            placed.formUnion(ids)
+            if folder.id == nil || ids.count == 1 {
+                items += ids.map { .guild($0) }
+            } else {
+                var copy = folder
+                copy.guildIDs = ids
+                items.append(.folder(copy))
+            }
+        }
+        // Newly joined guilds appear on top, as in Discord.
+        let rest = guildOrder.filter { !placed.contains($0) && guilds[$0] != nil }
+        return rest.reversed().map { .guild($0) } + items
+    }
+
+    var privateChannels: [Channel] {
+        privateChannelOrder.compactMap { channels[$0] }
+    }
+
+    // MARK: Permissions
+
+    func permissions(in channel: Channel) -> UInt64 {
+        guard let guildID = channel.guildID, let guild = guilds[guildID], let me else { return Permission.all }
+        if guild.ownerID == me.id { return Permission.all }
+        // Threads inherit their parent's permissions.
+        if channel.type.isThread, let parent = channel.parentID.flatMap({ channels[$0] }) {
+            return permissions(in: parent)
+        }
+        let myRoles = Set(myMembers[guildID]?.roles ?? [])
+        var base: UInt64 = 0
+        for role in guild.roles where role.id == guildID || myRoles.contains(role.id) {
+            base |= UInt64(role.permissions) ?? 0
+        }
+        if base & Permission.administrator != 0 { return Permission.all }
+        var perms = base
+        let overwrites = channel.permissionOverwrites ?? []
+        if let everyone = overwrites.first(where: { $0.id == guildID }) {
+            perms &= ~(UInt64(everyone.deny) ?? 0)
+            perms |= UInt64(everyone.allow) ?? 0
+        }
+        var allow: UInt64 = 0, deny: UInt64 = 0
+        for overwrite in overwrites where overwrite.type == 0 && myRoles.contains(overwrite.id) {
+            allow |= UInt64(overwrite.allow) ?? 0
+            deny |= UInt64(overwrite.deny) ?? 0
+        }
+        perms = (perms & ~deny) | allow
+        if let mine = overwrites.first(where: { $0.type == 1 && $0.id == me.id }) {
+            perms = (perms & ~(UInt64(mine.deny) ?? 0)) | (UInt64(mine.allow) ?? 0)
+        }
+        return perms
+    }
+
+    func canView(_ channel: Channel) -> Bool {
+        if channel.type == .category { return true }
+        return permissions(in: channel) & Permission.viewChannel != 0
+    }
+
+    /// @everyone, @here and every role (not just mentionable ones) ping.
+    func canMentionEveryone(in channel: Channel) -> Bool {
+        channel.guildID != nil && permissions(in: channel) & Permission.mentionEveryone != 0
+    }
+
+    /// Roles an @mention here would ping, highest first (@everyone itself excluded).
+    func mentionableRoles(in channel: Channel) -> [Role] {
+        guard let guild = channel.guildID, let roles = guilds[guild]?.roles else { return [] }
+        let all = canMentionEveryone(in: channel)
+        return roles.filter { $0.id != guild && ($0.mentionable || all) }.sorted { $0.position > $1.position }
+    }
+
+    func canSend(in channel: Channel) -> Bool {
+        guard canView(channel) else { return false }
+        if channel.type.isThread, channel.threadMetadata?.archived == true || channel.threadMetadata?.locked == true { return false }
+        let perms = permissions(in: channel)
+        // Private threads: only their creator or thread managers (membership isn't tracked).
+        if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id),
+           perms & Permission.manageThreads == 0 { return false }
+        return perms & (channel.type.isThread ? Permission.sendInThreads : Permission.sendMessages) != 0
+    }
+
+    // MARK: Unread and mentions
+
+    // One deadline for every mute, rather than timers attached to rows.
+    @ObservationIgnored private var muteExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private let notificationClock: () -> Date
+    private(set) var notificationTimeRevision = 0
+    @ObservationIgnored private var settingsVersions: [Snowflake: [String: UInt64]] = [:]
+    @ObservationIgnored private var settingsVersion: UInt64 = 0
+    @ObservationIgnored private var settingsSnapshotVersion: UInt64 = 0
+
+    init(notificationClock: @escaping () -> Date = { .now }) {
+        self.notificationClock = notificationClock
+    }
+
+    var notificationNow: Date { notificationClock() }
+
+    func refreshMuteExpirations() {
+        notificationTimeRevision &+= 1
+        derivedRevision &+= 1
+        scheduleMuteExpiry()
+    }
+
+    private func scheduleMuteExpiry() {
+        muteExpiryTask?.cancel()
+        let now = notificationClock()
+        let deadlines = guildSettings.values.flatMap { settings -> [Date] in
+            var ends = settings.channelOverrides.filter(\.muted).compactMap { $0.muteConfig?.endTime.flatMap(DiscordDate.parse) }
+            if settings.muted, let end = settings.muteConfig?.endTime.flatMap(DiscordDate.parse) { ends.append(end) }
+            return ends
+        }
+        guard let next = deadlines.filter({ $0 > now }).min() else { muteExpiryTask = nil; return }
+        let delay = next.timeIntervalSince(now)
+        muteExpiryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            self?.refreshMuteExpirations()
+        }
+    }
+
+    func isDirectlyMuted(_ target: NotificationTarget) -> Bool {
+        _ = notificationTimeRevision
+        let settings = guildSettings[target.resource]
+        if let id = target.channelID {
+            guard let entry = settings?.channelOverrides.first(where: { $0.channelID == id }) else { return false }
+            return entry.muted && isActiveMute(entry.muteConfig)
+        }
+        return settings?.muted == true && isActiveMute(settings?.muteConfig)
+    }
+
+    func isMuted(_ channel: Channel) -> Bool {
+        var current: Snowflake? = channel.id
+        var visited = Set<Snowflake>()
+        while let id = current, visited.insert(id).inserted {
+            if isDirectlyMuted(.channel(guild: channel.guildID, channel: id)) { return true }
+            current = channels[id]?.parentID
+        }
+        return false
+    }
+
+    func isMuted(guild: Snowflake) -> Bool { isDirectlyMuted(.guild(guild)) }
+
+    private func isActiveMute(_ config: MuteConfig?) -> Bool {
+        guard let end = config?.endTime.flatMap(DiscordDate.parse) else { return true }
+        return end > notificationClock()
+    }
+
+    func notificationLevel(_ target: NotificationTarget) -> NotificationLevel {
+        let settings = guildSettings[target.resource]
+        let raw: Int
+        if let id = target.channelID { raw = settings?.channelOverrides.first { $0.channelID == id }?.messageNotifications ?? 3 }
+        else { raw = settings?.messageNotifications ?? 3 }
+        return NotificationLevel(rawValue: raw) ?? .inherit
+    }
+
+    func effectiveNotificationLevel(_ target: NotificationTarget) -> (level: NotificationLevel, source: String) {
+        var current = target.channelID
+        var visited = Set<Snowflake>()
+        while let id = current, visited.insert(id).inserted {
+            let level = notificationLevel(.channel(guild: target.resource == 0 ? nil : target.resource, channel: id))
+            if level != .inherit { return (level, channels[id].map { $0.type.isPrivate ? dmName($0) : $0.name ?? "Channel" } ?? "Channel") }
+            current = channels[id]?.parentID
+        }
+        let guildLevel = notificationLevel(.guild(target.resource))
+        if guildLevel != .inherit { return (guildLevel, target.resource == 0 ? "Private messages" : "Server settings") }
+        return (NotificationLevel(rawValue: guilds[target.resource]?.defaultMessageNotifications ?? (target.resource == 0 ? 0 : 1)) ?? .mentions,
+                target.resource == 0 ? "Private message default" : "Server default")
+    }
+
+    func notificationVersions(for resource: Snowflake) -> [String: UInt64] {
+        var versions = settingsVersions[resource] ?? [:]
+        versions["$snapshot"] = settingsSnapshotVersion
+        return versions
+    }
+
+    /// HTTP may contain a full snapshot taken before a newer gateway update.
+    /// Apply only requested fields, and only if that field has not changed
+    /// authoritatively since the request began. Gateway partials merge freely.
+    func applyNotificationSettings(_ update: GuildSettingsUpdate, resource: Snowflake,
+                                   requested: Set<String>? = nil, versions: [String: UInt64]? = nil) throws {
+        if let versions, versions["$snapshot"] != settingsSnapshotVersion { return }
+        var base = guildSettings[resource].flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { try? JSONDecoder().decode(GuildSettingsUpdate.self, from: $0) }?.fields ?? [:]
+        base["guild_id"] = resource == 0 ? .null : .string(resource.description)
+        var changed = [String]()
+        for (path, value) in update.leaves {
+            if let requested, !requested.contains(path) { continue }
+            if let versions, (settingsVersions[resource]?[path] ?? 0) != (versions[path] ?? 0) { continue }
+            base = GuildSettingsUpdate.applying(value, at: path, to: base)
+            changed.append(path)
+        }
+        let merged = try JSONDecoder().decode(UserGuildSettings.self, from: JSONEncoder().encode(base))
+        guildSettings[resource] = merged
+        for path in changed {
+            settingsVersion &+= 1
+            settingsVersions[resource, default: [:]][path] = settingsVersion
+        }
+    }
+
+    func isUnread(_ channel: Channel) -> Bool {
+        guard channel.type.isTextLike || channel.type.isForumLike, let last = channel.lastMessageID else { return false }
+        guard let state = readStates[channel.id] else { return false }
+        return last > (state.lastMessageID ?? 0)
+    }
+
+    func mentionCount(_ channel: Snowflake) -> Int { readStates[channel]?.mentionCount ?? 0 }
+
+    struct GuildBadge: Equatable {
+        var unread: Bool
+        var mentions: Int
+    }
+
+    func badge(for guildID: Snowflake) -> GuildBadge {
+        _ = readStates; _ = channels; _ = guildSettings; _ = notificationTimeRevision // observation dependencies
+        if let cached = badgeCache[guildID], cached.revision == derivedRevision { return cached.badge }
+        let badge = computeBadge(for: guildID)
+        badgeCache[guildID] = (derivedRevision, badge)
+        return badge
+    }
+
+    private func computeBadge(for guildID: Snowflake) -> GuildBadge {
+        var unread = false
+        var mentions = 0
+        let guildMuted = isMuted(guild: guildID)
+        for id in channelIDs(in: guildID) {
+            guard let channel = channels[id], channel.type != .category else { continue }
+            mentions += mentionCount(channel.id)
+            if !guildMuted, !unread, !isMuted(channel), isUnread(channel), canView(channel) { unread = true }
+        }
+        return GuildBadge(unread: unread, mentions: mentions)
+    }
+
+    /// Mentions plus unread DMs: the app icon badge.
+    var totalBadge: Int {
+        var total = 0
+        for (id, state) in readStates where state.mentionCount > 0 {
+            if let channel = channels[id], channel.guildID == nil || canView(channel) { total += state.mentionCount }
+        }
+        return total
+    }
+
+    var unreadDMs: [Channel] {
+        privateChannels.filter { mentionCount($0.id) > 0 }
+    }
+
+    func typingUsers(in channel: Snowflake) -> [Snowflake] {
+        let cutoff = Date.now.addingTimeInterval(-10)
+        return (typing[channel] ?? [:]).filter { $0.value > cutoff && $0.key != me?.id }.map(\.key)
+    }
+
+    func voiceStates(in channel: Snowflake, guild: Snowflake) -> [VoiceState] {
+        (voiceStates[guild] ?? [:]).values.filter { $0.channelID == channel }
+    }
+
+    var myVoiceState: VoiceState? {
+        guard let me else { return nil }
+        for states in voiceStates.values { if let state = states[me.id], state.channelID != nil { return state } }
+        return nil
+    }
+
+    // MARK: Apply
+
+    func reset() {
+        resetPeople()
+        resetReadOperations()
+        settingsSnapshotVersion &+= 1
+        settingsVersions = [:]
+        me = nil; guilds = [:]; guildOrder = []; folders = []; channels = [:]; privateChannelOrder = []
+        users = [:]; myMembers = [:]; members = [:]; readStates = [:]; guildSettings = [:]; voiceStates = [:]
+        typing = [:]; memberLists = [:]; presences = [:]; isReady = false; joinedThreads = []
+    }
+
+    /// Draws the last known state before the gateway connects. READY replaces it.
+    func apply(snapshot: StoreSnapshot) {
+        guard !isReady else { return }
+        resetPeople()
+        resetReadOperations()
+        settingsSnapshotVersion &+= 1
+        settingsVersions = [:]
+        me = snapshot.me
+        guilds = Dictionary(snapshot.guilds.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        guildOrder = snapshot.guildOrder
+        folders = snapshot.folders
+        channels = Dictionary(snapshot.channels.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        users = Dictionary(snapshot.users.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for relationship in snapshot.relationships ?? [] { applyRelationship(relationship) }
+        myMembers = snapshot.myMembers
+        readStates = Dictionary(snapshot.readStates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        guildSettings = Dictionary(snapshot.guildSettings.map { ($0.guildID ?? 0, $0) }, uniquingKeysWith: { a, _ in a })
+        sortPrivateChannels()
+    }
+
+    func apply(ready: ReadyPayload) {
+        resetPeople()
+        presences = [:]
+        resetReadOperations()
+        readServerFloor = ready.readStateVersion
+        settingsSnapshotVersion &+= 1
+        settingsVersions = [:]
+        var users: [Snowflake: User] = [:]
+        for user in ready.users { users[user.id] = user }
+        users[ready.user.id] = ready.user
+        var channels: [Snowflake: Channel] = [:]
+        var guilds: [Snowflake: Guild] = [:]
+        var myMembers: [Snowflake: Member] = [:]
+        var voice: [Snowflake: [Snowflake: VoiceState]] = [:]
+        var joined = Set<Snowflake>()
+        for (index, guild) in ready.guilds.enumerated() {
+            var copy = guild
+            for channel in guild.channels { channels[channel.id] = channel }
+            for thread in guild.threads {
+                channels[thread.id] = thread
+                if thread.member != nil { joined.insert(thread.id) }
+            }
+            copy.channels = []
+            copy.threads = []
+            guilds[guild.id] = copy
+            if index < ready.mergedMembers.count,
+               let mine = ready.mergedMembers[index].first(where: { $0.userID == ready.user.id }) {
+                myMembers[guild.id] = mine
+            }
+            var states: [Snowflake: VoiceState] = [:]
+            for state in guild.voiceStates { states[state.userID] = state }
+            voice[guild.id] = states
+        }
+        for channel in ready.privateChannels {
+            channels[channel.id] = channel
+            for user in channel.recipients ?? [] { users[user.id] = user }
+        }
+        var readStates: [Snowflake: ReadState] = [:]
+        for state in ready.readStates where state.readStateType == 0 { readStates[state.id] = state }
+        var settings: [Snowflake: UserGuildSettings] = [:]
+        for entry in ready.guildSettings { settings[entry.guildID ?? 0] = entry }
+
+        self.me = ready.user
+        self.joinedThreads = joined
+        self.users = users
+        for relationship in ready.relationships { applyRelationship(relationship) }
+        self.channels = channels
+        self.guilds = guilds
+        self.guildOrder = ready.guilds.map(\.id)
+        self.myMembers = myMembers
+        self.voiceStates = voice
+        self.readStates = readStates
+        self.guildSettings = settings
+        self.members = [:]
+        self.memberLists = [:]
+        if let proto = ready.settingsProto, let parsed = ProtoSettings.guildFolders(base64: proto) {
+            folders = parsed.folders
+        }
+        sortPrivateChannels()
+        isReady = true
+        log.info("READY: \(guilds.count) guilds, \(channels.count) channels, \(readStates.count) read states, \(self.folders.count) folders")
+    }
+
+    func apply(supplemental: ReadySupplemental) {
+        let order = guildOrder
+        for (index, list) in supplemental.mergedMembers.enumerated() where index < order.count {
+            if let me, let mine = list.first(where: { $0.userID == me.id }) { myMembers[order[index]] = mine }
+        }
+        var presences = self.presences
+        for presence in supplemental.friendPresences {
+            if let id = presence.userID ?? presence.user?.id { if let status = presence.status { presences[id] = status }
+                if let user = presence.user { remember(person: user.fields, id: user.id, fromGateway: true) } }
+        }
+        self.presences = presences
+    }
+
+    private func sortPrivateChannels() {
+        privateChannelOrder = channels.values.filter { $0.type.isPrivate }
+            .sorted { ($0.lastMessageID ?? $0.id) > ($1.lastMessageID ?? $1.id) }
+            .map(\.id)
+    }
+
+    func upsert(guild: Guild) {
+        var copy = guild
+        if copy.defaultMessageNotifications == nil {
+            copy.defaultMessageNotifications = guilds[guild.id]?.defaultMessageNotifications
+        }
+        for channel in guild.channels { changedChannel(channel.id); channels[channel.id] = channel }
+        for thread in guild.threads {
+            changedChannel(thread.id)
+            channels[thread.id] = thread
+            if thread.member != nil { joinedThreads.insert(thread.id) }
+        }
+        copy.channels = []
+        copy.threads = []
+        guilds[guild.id] = copy
+        if !guildOrder.contains(guild.id) { guildOrder.append(guild.id) }
+        var states: [Snowflake: VoiceState] = [:]
+        for state in guild.voiceStates { states[state.userID] = state }
+        voiceStates[guild.id] = states
+    }
+
+    func upsert(channel: Channel) {
+        changedChannel(channel.id)
+        var channel = channel
+        // Updates omit fields the list relies on; keep the known ones.
+        if let existing = channels[channel.id] {
+            if channel.lastMessageID == nil { channel.lastMessageID = existing.lastMessageID }
+            if channel.recipients == nil { channel.recipients = existing.recipients }
+            if channel.recipientIDs == nil { channel.recipientIDs = existing.recipientIDs }
+        }
+        channels[channel.id] = channel
+        if channel.type == .dm {
+            for id in channel.recipients.map({ $0.map(\.id) }) ?? channel.recipientIDs ?? [] { dmVersions[id, default: 0] &+= 1 }
+        }
+        if channel.member != nil { joinedThreads.insert(channel.id) }
+        for user in channel.recipients ?? [] { users[user.id] = user }
+        if channel.type.isPrivate { sortPrivateChannels() }
+    }
+
+    /// Threads and forum posts loaded over REST join the known channels.
+    func remember(threads: [Channel]) {
+        for thread in threads where channels[thread.id] == nil || channels[thread.id] != thread { upsert(channel: thread) }
+    }
+
+    func remember(messageAuthors messages: [Message]) {
+        var known = users
+        for message in messages {
+            known[message.author.id] = known[message.author.id] ?? message.author
+            for user in message.mentions where known[user.id] == nil { known[user.id] = user }
+            if let ref = message.referencedMessage?.message, known[ref.author.id] == nil { known[ref.author.id] = ref.author }
+        }
+        if known.count != users.count { users = known }
+        for message in messages {
+            if let guild = message.guildID ?? channels[message.channelID]?.guildID, let member = message.member {
+                var copy = member
+                copy.user = message.author
+                copy.userID = message.author.id
+                members[guild, default: [:]][message.author.id] = copy
+            }
+        }
+    }
+
+    func handle(_ dispatch: GatewayDispatch) {
+        do {
+            switch dispatch.name {
+            case "RELATIONSHIP_ADD", "RELATIONSHIP_UPDATE", "RELATIONSHIP_REMOVE":
+                applyRelationship(try dispatch.decode(Relationship.self), remove: dispatch.name == "RELATIONSHIP_REMOVE")
+            case "READY_SUPPLEMENTAL":
+                apply(supplemental: try dispatch.decode(ReadySupplemental.self))
+            case "GUILD_CREATE":
+                upsert(guild: try dispatch.decode(Guild.self))
+            case "GUILD_UPDATE":
+                struct Update: Decodable {
+                    var id: Snowflake
+                    var name: String?
+                    var icon: String?
+                    var iconWasProvided: Bool
+                    var roles: [Role]?
+                    var properties: GuildProperties?
+                    var defaultMessageNotifications: Int?
+                    enum CodingKeys: String, CodingKey {
+                        case id, name, icon, roles, properties
+                        case defaultMessageNotifications = "default_message_notifications"
+                    }
+                    init(from decoder: Decoder) throws {
+                        let c = try decoder.container(keyedBy: CodingKeys.self)
+                        id = try c.decode(Snowflake.self, forKey: .id)
+                        name = try c.decodeIfPresent(String.self, forKey: .name)
+                        iconWasProvided = c.contains(.icon)
+                        icon = try c.decodeIfPresent(String.self, forKey: .icon)
+                        roles = try c.decodeIfPresent([Role].self, forKey: .roles)
+                        properties = try c.decodeIfPresent(GuildProperties.self, forKey: .properties)
+                        defaultMessageNotifications = try c.decodeIfPresent(Int.self, forKey: .defaultMessageNotifications)
+                    }
+                }
+                let update = try dispatch.decode(Update.self)
+                if var guild = guilds[update.id] {
+                    if let name = update.name { guild.name = name }
+                    if update.iconWasProvided { guild.icon = update.icon }
+                    if let roles = update.roles { guild.roles = roles }
+                    if let level = update.defaultMessageNotifications ?? update.properties?.defaultMessageNotifications {
+                        guild.defaultMessageNotifications = level
+                    }
+                    guilds[update.id] = guild
+                }
+            case "GUILD_DELETE":
+                let deleted = try dispatch.decode(GuildDelete.self)
+                if deleted.unavailable != true {
+                    guilds[deleted.id] = nil
+                    guildOrder.removeAll { $0 == deleted.id }
+                    for channel in channels.values where channel.guildID == deleted.id { changedChannel(channel.id) }
+                    channels = channels.filter { $0.value.guildID != deleted.id }
+                }
+            case "GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE":
+                let event = try dispatch.decode(GuildRoleEvent.self)
+                if let role = event.role, var guild = guilds[event.guildID] {
+                    guild.roles.removeAll { $0.id == role.id }
+                    guild.roles.append(role)
+                    guilds[event.guildID] = guild
+                }
+            case "GUILD_ROLE_DELETE":
+                let event = try dispatch.decode(GuildRoleEvent.self)
+                if let id = event.roleID { guilds[event.guildID]?.roles.removeAll { $0.id == id } }
+            case "GUILD_MEMBER_UPDATE":
+                let update = try dispatch.decode(GuildMemberUpdate.self)
+                let member = Member(user: update.user, nick: update.nick, roles: update.roles)
+                if update.user.id == me?.id { myMembers[update.guildID] = member }
+                else { members[update.guildID, default: [:]][update.user.id] = member }
+            case "CHANNEL_CREATE", "CHANNEL_UPDATE", "THREAD_CREATE", "THREAD_UPDATE":
+                upsert(channel: try dispatch.decode(Channel.self))
+            case "CHANNEL_DELETE", "THREAD_DELETE":
+                struct Deleted: Decodable { var id: Snowflake }
+                let id = try dispatch.decode(Deleted.self).id
+                changedChannel(id)
+                if let channel = channels[id], channel.type == .dm {
+                    for user in channel.recipients.map({ $0.map(\.id) }) ?? channel.recipientIDs ?? [] { dmVersions[user, default: 0] &+= 1 }
+                }
+                channels[id] = nil
+                sortPrivateChannels()
+            case "THREAD_LIST_SYNC":
+                let sync = try dispatch.decode(ThreadListSync.self)
+                for var thread in sync.threads {
+                    changedChannel(thread.id)
+                    thread.guildID = sync.guildID
+                    channels[thread.id] = thread
+                    if thread.member != nil { joinedThreads.insert(thread.id) }
+                }
+                for entry in sync.members ?? [] { if let id = entry.id { joinedThreads.insert(id) } }
+            case "THREAD_MEMBER_UPDATE":
+                struct Mine: Decodable { var id: Snowflake? }
+                if let id = try dispatch.decode(Mine.self).id { joinedThreads.insert(id) }
+            case "THREAD_MEMBERS_UPDATE":
+                let update = try dispatch.decode(ThreadMembersUpdate.self)
+                if let me = me?.id {
+                    if update.addedMembers?.contains(where: { $0.userID == me }) == true { joinedThreads.insert(update.id) }
+                    if update.removedMemberIDs?.contains(me) == true { joinedThreads.remove(update.id) }
+                }
+            case "MESSAGE_CREATE":
+                let message = try dispatch.decode(Message.self)
+                received(message)
+            case "MESSAGE_ACK":
+                let ack = try dispatch.decode(MessageAck.self)
+                applyReadEcho(ack)
+            case "TYPING_START":
+                let event = try dispatch.decode(TypingStart.self)
+                typing[event.channelID, default: [:]][event.userID] = .now
+                if let member = event.member, let guild = event.guildID, let user = member.user {
+                    members[guild, default: [:]][user.id] = member
+                    users[user.id] = user
+                }
+                pruneTypingSoon(event.channelID)
+            case "VOICE_STATE_UPDATE":
+                let state = try dispatch.decode(VoiceState.self)
+                let guild = state.guildID ?? 0
+                if state.channelID == nil { voiceStates[guild]?[state.userID] = nil }
+                else { voiceStates[guild, default: [:]][state.userID] = state }
+                if let member = state.member, let user = member.user {
+                    users[user.id] = user
+                    if let guildID = state.guildID, user.id != me?.id { members[guildID, default: [:]][user.id] = member }
+                }
+            case "USER_GUILD_SETTINGS_UPDATE":
+                let update = try dispatch.decode(GuildSettingsUpdate.self)
+                guard update.fields["guild_id"] != nil else { break }
+                try applyNotificationSettings(update, resource: update.guildID)
+            case "USER_SETTINGS_PROTO_UPDATE":
+                let update = try dispatch.decode(SettingsProtoUpdate.self)
+                if update.settings.type == 1, update.partial != true,
+                   let parsed = ProtoSettings.guildFolders(base64: update.settings.proto) {
+                    folders = parsed.folders
+                }
+            case "PRESENCE_UPDATE":
+                let presence = try dispatch.decode(PresenceUpdate.self)
+                if let status = presence.status { presences[presence.user.id] = status }
+                remember(person: presence.user.fields, id: presence.user.id, fromGateway: true)
+            case "GUILD_MEMBER_LIST_UPDATE":
+                apply(memberList: try dispatch.decode(MemberListUpdate.self))
+            case "GUILD_EMOJIS_UPDATE":
+                struct Emojis: Decodable { var guild_id: Snowflake; var emojis: [Emoji] }
+                let update = try dispatch.decode(Emojis.self)
+                guilds[update.guild_id]?.emojis = update.emojis
+            case "GUILD_MEMBERS_CHUNK":
+                // The answer to a member search (op 8), for autocomplete.
+                struct Chunk: Decodable { var guild_id: Snowflake; var members: [Member] }
+                let chunk = try dispatch.decode(Chunk.self)
+                for member in chunk.members {
+                    guard let user = member.user else { continue }
+                    users[user.id] = user
+                    if user.id != me?.id { members[chunk.guild_id, default: [:]][user.id] = member }
+                }
+                memberSearchRevision += 1
+            default:
+                break
+            }
+        } catch {
+            log.error("decode \(dispatch.name, privacy: .public): \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func received(_ message: Message) {
+        if var channel = channels[message.channelID] {
+            changedChannel(message.channelID)
+            channel.lastMessageID = message.id
+            channels[message.channelID] = channel
+            if channel.type.isPrivate { sortPrivateChannels() }
+        }
+        typing[message.channelID]?[message.author.id] = nil
+        if let guild = message.guildID, let member = message.member, message.author.id != me?.id {
+            var copy = member
+            copy.user = message.author
+            copy.userID = message.author.id
+            members[guild, default: [:]][message.author.id] = copy
+        }
+        users[message.author.id] = message.author
+        for user in message.mentions where users[user.id] == nil { users[user.id] = user }
+        let held = manualUnreadChannels.contains(message.channelID) || pendingUnreadChannels.contains(message.channelID)
+        if message.author.id == me?.id, !held {
+            readVersions[message.channelID, default: ReadVersion()].boundary += 1
+            readVersions[message.channelID, default: ReadVersion()].mentions += 1
+            // Our own message counts as read.
+            readStates[message.channelID] = ReadState(id: message.channelID, lastMessageID: message.id, mentionCount: 0)
+            onAcceptedRead?(message.channelID, message.id)
+        } else if (held || pendingReadChannels.contains(message.channelID) || !(message.channelID == visibleChannel && visibleIsLive)), mentionsMe(message) {
+            readVersions[message.channelID, default: ReadVersion()].mentions += 1
+            readVersions[message.channelID, default: ReadVersion()].mentionArrivals += 1
+            var state = readStates[message.channelID] ?? ReadState(id: message.channelID, lastMessageID: nil, mentionCount: 0)
+            state.mentionCount += 1
+            readStates[message.channelID] = state
+        } else if message.channelID != visibleChannel, readStates[message.channelID] == nil {
+            readStates[message.channelID] = ReadState(id: message.channelID, lastMessageID: nil, mentionCount: 0)
+        }
+        onMessageCreate?(message)
+    }
+
+    /// Mentions that count toward badges: direct, role, @everyone (unless
+    /// suppressed) and every message in a DM.
+    func mentionsMe(_ message: Message) -> Bool {
+        guard let me, message.author.id != me.id else { return false }
+        guard let channel = channels[message.channelID] else { return false }
+        if channel.type.isPrivate { return !isMuted(channel) }
+        if message.mentions.contains(where: { $0.id == me.id }) { return true }
+        let settings = guildSettings[channel.guildID ?? 0]
+        if message.mentionEveryone, settings?.suppressEveryone != true { return true }
+        if let guild = channel.guildID, settings?.suppressRoles != true,
+           !Set(message.mentionRoles).isDisjoint(with: myMembers[guild]?.roles ?? []) { return true }
+        return false
+    }
+
+    /// Whether a new message should raise a notification, following the
+    /// guild/channel notification level and mutes.
+    func shouldNotify(_ message: Message) -> Bool {
+        guard let me, message.author.id != me.id, let channel = channels[message.channelID] else { return false }
+        guard !isBlocked(message.author.id), !isMuted(channel), !isMuted(guild: channel.guildID ?? 0) else { return false }
+        let level = effectiveNotificationLevel(.channel(guild: channel.guildID, channel: channel.id)).level.rawValue
+        switch level {
+        case 0: return true
+        case 1:
+            if channel.type.isPrivate { return message.mentions.contains { $0.id == me.id } || message.mentionEveryone }
+            return mentionsMe(message)
+        default: return false
+        }
+    }
+
+    func markRead(_ channel: Snowflake, upTo message: Snowflake) {
+        guard !manualUnreadChannels.contains(channel), !pendingUnreadChannels.contains(channel) else { return }
+        var state = readStates[channel] ?? ReadState(id: channel, lastMessageID: nil, mentionCount: 0)
+        guard state.lastMessageID.map({ $0 < message }) ?? true || state.mentionCount > 0 else { return }
+        readVersions[channel, default: ReadVersion()].boundary += 1
+        readVersions[channel, default: ReadVersion()].mentions += 1
+        let advancedBoundary = message > (state.lastMessageID ?? 0)
+        state.lastMessageID = max(message, state.lastMessageID ?? 0)
+        state.mentionCount = 0
+        readStates[channel] = state
+        if advancedBoundary, let boundary = state.lastMessageID { onAcceptedRead?(channel, boundary) }
+    }
+
+    private func pruneTypingSoon(_ channel: Snowflake) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(10.5))
+            guard let self else { return }
+            let cutoff = Date.now.addingTimeInterval(-10)
+            if let entries = self.typing[channel] {
+                let live = entries.filter { $0.value > cutoff }
+                if live.count != entries.count { self.typing[channel] = live }
+            }
+        }
+    }
+
+    // MARK: Member list
+
+    private func apply(memberList update: MemberListUpdate) {
+        var state = memberLists[update.guildID].flatMap { $0.id == update.id ? $0 : nil } ?? MemberListState(id: update.id)
+        state.memberCount = update.memberCount ?? state.memberCount
+        state.onlineCount = update.onlineCount ?? state.onlineCount
+        let groupCounts = Dictionary(update.groups.map { ($0.id, $0.count ?? 0) }, uniquingKeysWith: { a, _ in a })
+        func row(_ item: MemberListUpdate.Item) -> MemberListRow {
+            switch item {
+            case .group(let group):
+                return .group(id: group.id, title: groupTitle(group.id, guild: update.guildID), count: groupCounts[group.id] ?? group.count ?? 0)
+            case .member(let member, let status):
+                if let user = member.user {
+                    users[user.id] = user
+                    members[update.guildID, default: [:]][user.id] = member
+                    presences[user.id] = status
+                }
+                return .member(member, status)
+            }
+        }
+        func ensure(_ count: Int) { if state.slots.count < count { state.slots += Array(repeating: nil, count: count - state.slots.count) } }
+        for op in update.ops {
+            switch op.op {
+            case "SYNC":
+                guard let range = op.range, range.count == 2, range[0] >= 0 else { continue }
+                let items = (op.items ?? []).map(row)
+                ensure(range[0] + items.count)
+                for (offset, item) in items.enumerated() { state.slots[range[0] + offset] = item }
+            case "INSERT":
+                if let index = op.index, let item = op.item, index >= 0 {
+                    ensure(index)
+                    state.slots.insert(row(item), at: min(index, state.slots.count))
+                }
+            case "UPDATE":
+                if let index = op.index, let item = op.item, index >= 0 { ensure(index + 1); state.slots[index] = row(item) }
+            case "DELETE":
+                if let index = op.index, index >= 0, index < state.slots.count { state.slots.remove(at: index) }
+            case "INVALIDATE":
+                // Keep positions: later ops refer to the original indices.
+                if let range = op.range, range.count == 2, range[0] >= 0 {
+                    for index in range[0]...max(range[0], range[1]) where index < state.slots.count { state.slots[index] = nil }
+                }
+            default:
+                break
+            }
+        }
+        // Refresh group counts on existing headers.
+        state.slots = state.slots.map { slot in
+            if case .group(let id, let title, _)? = slot, let count = groupCounts[id] { return .group(id: id, title: title, count: count) }
+            return slot
+        }
+        memberLists[update.guildID] = state
+    }
+
+    private func groupTitle(_ id: String, guild: Snowflake) -> String {
+        switch id {
+        case "online": return "Online"
+        case "offline": return "Offline"
+        default: return Snowflake(id).flatMap { role($0, in: guild)?.name } ?? id
+        }
+    }
+
+    // MARK: Mock / cache
+
+    func seed(members byGuild: [Snowflake: [Member]]) {
+        for (guild, entries) in byGuild {
+            for member in entries {
+                guard let id = member.userID else { continue }
+                members[guild, default: [:]][id] = member
+                if let user = member.user { users[id] = user }
+            }
+        }
+    }
+}

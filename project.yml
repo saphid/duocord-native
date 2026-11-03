@@ -1,0 +1,102 @@
+name: DuocordNative
+options:
+  bundleIdPrefix: com.saphid
+  deploymentTarget:
+    iOS: "27.1"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: NJZUMEA4BN
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  DuocordNative:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - Discord
+      - Markdown
+      - Features
+      - Platform
+      - Shared
+      - Resources
+    dependencies:
+      - target: DuocordNativeLiveActivity
+      - sdk: libz.tbd
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIBackgroundModes: [audio]
+        UIApplicationSupportsMultipleScenes: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.saphid.duocord
+        PRODUCT_NAME: DuocordNative
+        INFOPLIST_KEY_NSSupportsLiveActivities: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Duocord Native
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_NSCameraUsageDescription: Duocord uses the camera for photos you send.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Duocord uses the microphone in voice channels.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Duocord attaches photos you choose to messages.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Duocord saves images you choose to keep.
+  DuocordNativeLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - LiveActivity
+      - Shared
+    info:
+      path: LiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Duocord
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.saphid.duocord.LiveActivity
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
+  DuocordNativeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: DuocordNative
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuocordNative.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DuocordNative
+        BUNDLE_LOADER: $(TEST_HOST)
+schemes:
+  DuocordNative:
+    build:
+      targets:
+        DuocordNative: all
+    run:
+      config: Debug
+    test:
+      commandLineArguments:
+        "-DuocordMock YES": true
+      targets:
+        - DuocordNativeTests
+    profile:
+      config: Release
