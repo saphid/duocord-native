@@ -37,7 +37,7 @@ struct ChatView: View {
                     MessageListView(channel: channel)
                         .ignoresSafeArea(.container, edges: .top)
                         .safeAreaInset(edge: .top, spacing: 0) { UnreadNavigationBar(channel: channel.id) }
-                        .safeAreaInset(edge: .bottom, spacing: 0) { ChatControls(channel: channel) }
+                        .safeAreaInset(edge: .bottom, spacing: 0) { ChatControls(channel: channel).homeIndicatorClearance() }
                 }
             }
         }
@@ -1216,6 +1216,9 @@ struct ComposerTextInput: UIViewRepresentable {
         view.attachmentChanged = { [weak coordinator = context.coordinator] view in
             coordinator?.windowChanged(view)
         }
+        view.pastedImages = { [weak coordinator = context.coordinator] files in
+            coordinator?.attach(files)
+        }
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
@@ -1235,6 +1238,8 @@ struct ComposerTextInput: UIViewRepresentable {
         view.accessibilityLabel = placeholder
         view.commandHandler = handleKey
         view.commandsEnabled = hasSuggestions
+        // An edit changes text only (the attachment button is disabled too).
+        view.acceptsImages = draft.editing == nil
         if view.text?.utf16.elementsEqual(draft.text.utf16) != true {
             view.text = draft.text
             context.coordinator.pending = nil
@@ -1253,6 +1258,7 @@ struct ComposerTextInput: UIViewRepresentable {
         coordinator.owner.model.composerContinuity.detach(coordinator.lease, in: coordinator.owner.channelID)
         view.delegate = nil
         view.attachmentChanged = nil
+        view.pastedImages = nil
         view.commandHandler = nil
     }
 
@@ -1333,6 +1339,11 @@ struct ComposerTextInput: UIViewRepresentable {
             saveSelection(view)
         }
 
+        func attach(_ files: [DraftAttachment]) {
+            guard ownsField, owner.model.selectedChannel == owner.channelID, owner.draft.editing == nil else { return }
+            owner.draft.attachments.append(contentsOf: files)
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
             guard ownsField else { return }
             endingEditing = false
@@ -1361,9 +1372,39 @@ struct ComposerTextInput: UIViewRepresentable {
     final class Input: UITextView {
         var commandsEnabled = false
         var attachmentChanged: ((Input) -> Void)?
+        /// A plain-text view refuses pasted images; they become attachments.
+        var pastedImages: (([DraftAttachment]) -> Void)?
+        var acceptsImages = true
         override func didMoveToWindow() {
             super.didMoveToWindow()
             attachmentChanged?(self)
+        }
+
+        override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+            if action == #selector(paste(_:)), acceptsImages, pastedImages != nil, UIPasteboard.general.hasImages { return true }
+            return super.canPerformAction(action, withSender: sender)
+        }
+
+        override func paste(_ sender: Any?) {
+            guard acceptsImages, let pastedImages, UIPasteboard.general.hasImages else { return super.paste(sender) }
+            let files = Self.images(in: UIPasteboard.general)
+            if files.isEmpty { super.paste(sender) } else { pastedImages(files) }
+        }
+
+        /// Each pasted image in its original encoding (so a GIF stays animated).
+        /// Raw bytes per item: `items` hands images back as re-encodable UIImages.
+        static func images(in pasteboard: UIPasteboard) -> [DraftAttachment] {
+            let stamp = Int(Date.now.timeIntervalSince1970)
+            return (0..<pasteboard.numberOfItems).compactMap { index in
+                let set = IndexSet(integer: index)
+                let types = (pasteboard.types(forItemSet: set)?.first ?? []).compactMap { UTType($0) }.filter { $0.conforms(to: .image) }
+                guard let type = types.first(where: { $0 == .gif }) ?? types.first(where: { $0 == .png }) ?? types.first,
+                      let data = pasteboard.data(forPasteboardType: type.identifier, inItemSet: set)?.first,
+                      data.count < 25_000_000 else { return nil }
+                return DraftAttachment(filename: "image-\(stamp).\(type.preferredFilenameExtension ?? "png")", data: data,
+                                       contentType: type.preferredMIMEType ?? "image/png",
+                                       thumbnail: ImagePipeline.downsample(data, maxPixel: 160, scale: 2))
+            }
         }
         var commandHandler: ((KeyEquivalent) -> KeyPress.Result)?
         override var keyCommands: [UIKeyCommand]? {
