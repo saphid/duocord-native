@@ -536,6 +536,7 @@ struct ChannelRow: View {
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
         .contextMenu {
             ChannelReadButton(channel: channel.id)
+            ThreadsReadButton(parent: channel)
             NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
         }
         .accessibilityIdentifier("channel-\(channel.id)")

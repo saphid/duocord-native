@@ -11,6 +11,22 @@ struct ChannelReadButton: View {
     }
 }
 
+/// Shown only for a parent with eligible threads; pending while any of them saves.
+struct ThreadsReadButton: View {
+    @Environment(AppModel.self) private var model
+    let parent: Channel
+    var body: some View {
+        let threads = parent.type.isThread ? [] : model.eligibleThreads(in: parent.id)
+        if !threads.isEmpty {
+            let saving = threads.contains { model.readSaves[$0.id, default: 0] > 0 }
+            Button(saving ? "Updating Read State…" : "Mark Threads as Read", systemImage: "checkmark.bubble") {
+                model.markThreadsAsRead(in: parent.id)
+            }
+            .disabled(saving)
+        }
+    }
+}
+
 /// Lives in the conversation page. No count or timestamp is inferred from a
 /// partial history window. Both controls keep their titles at large text sizes.
 struct UnreadNavigationBar: View {

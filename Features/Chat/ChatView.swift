@@ -88,6 +88,7 @@ struct ChatView: View {
                     // up: Back, More and Inbox only.
                     Menu("More", systemImage: "ellipsis") {
                         ChannelReadButton(channel: channel.id)
+                        ThreadsReadButton(parent: channel)
                         NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
                         Button("Search", systemImage: "magnifyingglass") { model.present(.search) }
                         if channel.guildID != nil {
@@ -101,6 +102,7 @@ struct ChatView: View {
                 } else if (verticalBar == nil && !fold.isCompact) || model.keyboardVisible {
                     Menu("More", systemImage: "ellipsis") {
                         ChannelReadButton(channel: channel.id)
+                        ThreadsReadButton(parent: channel)
                         NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
                         if !channel.type.isPrivate {
                             Button("Threads", systemImage: "bubble.left.and.text.bubble.right") { model.present(.threads(threadParent)) }
@@ -110,6 +112,7 @@ struct ChatView: View {
                 } else {
                     Menu("More", systemImage: "ellipsis") {
                         ChannelReadButton(channel: channel.id)
+                        ThreadsReadButton(parent: channel)
                         NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
                     }
                     if !channel.type.isPrivate {

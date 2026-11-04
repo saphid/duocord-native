@@ -58,12 +58,26 @@ extension AppModel {
         enqueueRead(eligibleReadChannels.compactMap(capturedRead), bulk: true)
     }
 
+    /// A parent's threads only; the parent and other channels keep their state.
+    /// Same eligibility as server reads, so archived threads and forum posts
+    /// already known (not just the sidebar's prefix) are included.
+    @discardableResult
+    func markThreadsAsRead(in parent: Snowflake) -> Task<Void, Never> {
+        enqueueRead(eligibleThreads(in: parent).sorted { $0.id < $1.id }.compactMap(capturedRead), bulk: true)
+    }
+
+    func eligibleThreads(in parent: Snowflake) -> [Channel] {
+        store.knownThreads(in: parent).filter { $0.type.isThread && isReadEligible($0) }
+    }
+
     var eligibleReadChannels: [Channel] {
-        store.channels.values.filter {
-            ($0.type.isTextLike || $0.type.isForumLike) && ($0.guildID == nil || store.canView($0))
-                && ($0.type != .privateThread || store.joinedThreads.contains($0.id) || $0.ownerID == store.me?.id
-                    || store.permissions(in: $0) & Permission.manageThreads != 0)
-        }.sorted { $0.id < $1.id }
+        store.channels.values.filter(isReadEligible).sorted { $0.id < $1.id }
+    }
+
+    private func isReadEligible(_ channel: Channel) -> Bool {
+        (channel.type.isTextLike || channel.type.isForumLike) && (channel.guildID == nil || store.canView(channel))
+            && (channel.type != .privateThread || store.joinedThreads.contains(channel.id) || channel.ownerID == store.me?.id
+                || store.permissions(in: channel) & Permission.manageThreads != 0)
     }
 
     private func capturedRead(_ channel: Channel) -> ReadAcknowledgement? {
