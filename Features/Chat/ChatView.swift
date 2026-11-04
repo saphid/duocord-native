@@ -330,6 +330,10 @@ struct ChatControls: View {
     @Environment(DiscordStore.self) private var store
     let channel: Channel
 
+    /// Height of the fade drawn above the controls. The message list keeps
+    /// this much clear space at its bottom, so the newest message rests above it.
+    static let fadeHeight: CGFloat = 14
+
     var body: some View {
         VStack(spacing: 0) {
             if channel.type.isVoice {
@@ -350,8 +354,8 @@ struct ChatControls: View {
         // A short fade so a message partly behind the controls reads as scrolled, not cut.
         .overlay(alignment: .top) {
             LinearGradient(colors: [Color.chatBackground.opacity(0), Color.chatBackground], startPoint: .top, endPoint: .bottom)
-                .frame(height: 14)
-                .offset(y: -14)
+                .frame(height: Self.fadeHeight)
+                .offset(y: -Self.fadeHeight)
                 .allowsHitTesting(false)
         }
     }

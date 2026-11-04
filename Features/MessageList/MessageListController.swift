@@ -190,6 +190,9 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.contentInsetAdjustmentBehavior = .always
+        // The controls' fade reaches above them into the list; at the bottom
+        // the newest message rests above it rather than under it.
+        collectionView.contentInset.bottom = ChatControls.fadeHeight
         collectionView.keyboardDismissMode = .interactive
         collectionView.alwaysBounceVertical = true
         collectionView.register(MessageCell.self, forCellWithReuseIdentifier: "message")
