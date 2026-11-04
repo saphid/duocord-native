@@ -51,6 +51,7 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .toolbarBackground(Color.chatBackground, for: .navigationBar)
+        .threadPromptHost(.chat)
         .onAppear { Perf.shared.markOnce("chatViewAppear"); Perf.shared.end("channelSwitch", extra: ["channel": channel.id.description, "cached": model.messages.existingTimeline(for: channel.id)?.messages.isEmpty == false]) }
     }
 
@@ -88,9 +89,7 @@ struct ChatView: View {
                     // The outer display's side bar is shortest with the keyboard
                     // up: Back, More and Inbox only.
                     Menu("More", systemImage: "ellipsis") {
-                        ChannelReadButton(channel: channel.id)
-                        ThreadsReadButton(parent: channel)
-                        NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
+                        ChannelActionsMenu(channel: channel)
                         Button("Search", systemImage: "magnifyingglass") { model.present(.search) }
                         if channel.guildID != nil {
                             Button("Members", systemImage: "person.2") { model.toggleMembers() }
@@ -102,9 +101,7 @@ struct ChatView: View {
                     }
                 } else if horizontalBar || model.keyboardVisible {
                     Menu("More", systemImage: "ellipsis") {
-                        ChannelReadButton(channel: channel.id)
-                        ThreadsReadButton(parent: channel)
-                        NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
+                        ChannelActionsMenu(channel: channel)
                         if !channel.type.isPrivate {
                             Button("Threads", systemImage: "bubble.left.and.text.bubble.right") { model.present(.threads(threadParent)) }
                         }
@@ -112,9 +109,7 @@ struct ChatView: View {
                     }
                 } else {
                     Menu("More", systemImage: "ellipsis") {
-                        ChannelReadButton(channel: channel.id)
-                        ThreadsReadButton(parent: channel)
-                        NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
+                        ChannelActionsMenu(channel: channel)
                     }
                     if !channel.type.isPrivate {
                         Button("Threads", systemImage: threadsOpen ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.and.text.bubble.right") {

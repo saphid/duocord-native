@@ -209,8 +209,9 @@ final class SidebarThreadUnreadTests: XCTestCase {
         XCTAssertEqual(entry(parentMuted, prs)?.rollup, DiscordStore.ThreadRollup(unreadThreads: 0, mentions: 1, mentionThreads: 1))
         XCTAssertEqual(parentMuted.badge(for: guild), DiscordStore.GuildBadge(unread: false, mentions: 1))
 
-        let threadMuted = try store(threads: threads, readStates: states,
-                                    settings: #"{"guild_id":"100","channel_overrides":[{"channel_id":"\#(unread.id)","muted":true}]}"#)
+        var mutedThread = unread
+        mutedThread.member?.muted = true
+        let threadMuted = try store(threads: [mutedThread], readStates: states)
         XCTAssertEqual(entry(threadMuted, prs)?.rollup.unreadThreads, 0)
         XCTAssertEqual(threadMuted.badge(for: guild), DiscordStore.GuildBadge(unread: false, mentions: 1))
 

@@ -34,7 +34,7 @@ nonisolated struct ThreadSearchResult: Decodable, Sendable {
     var hasMore: Bool
 
     enum CodingKeys: String, CodingKey {
-        case threads
+        case threads, members
         case firstMessages = "first_messages"
         case hasMore = "has_more"
     }
@@ -45,7 +45,8 @@ nonisolated struct ThreadSearchResult: Decodable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        threads = try c.decodeIfPresent([Channel].self, forKey: .threads) ?? []
+        threads = try ThreadListMembers.hydrate(c.decodeIfPresent([Channel].self, forKey: .threads) ?? [],
+                                               members: c.decodeIfPresent([ThreadListSync.MemberEntry].self, forKey: .members) ?? [])
         firstMessages = (try? c.decodeIfPresent([Message].self, forKey: .firstMessages)) ?? []
         hasMore = try c.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
     }
@@ -54,7 +55,35 @@ nonisolated struct ThreadSearchResult: Decodable, Sendable {
 nonisolated struct ArchivedThreadPage: Decodable, Sendable {
     var threads: [Channel]
     var hasMore: Bool
-    enum CodingKeys: String, CodingKey { case threads; case hasMore = "has_more" }
+    enum CodingKeys: String, CodingKey { case threads, members; case hasMore = "has_more" }
+
+    init(threads: [Channel], hasMore: Bool) {
+        self.threads = threads; self.hasMore = hasMore
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        threads = try ThreadListMembers.hydrate(c.decode([Channel].self, forKey: .threads),
+                                               members: c.decodeIfPresent([ThreadListSync.MemberEntry].self, forKey: .members) ?? [])
+        hasMore = try c.decode(Bool.self, forKey: .hasMore)
+    }
+}
+
+/// REST thread lists return the current user's memberships separately from
+/// the channels. Keep them attached through page validation and publication.
+nonisolated private enum ThreadListMembers {
+    static func hydrate(_ threads: [Channel], members: [ThreadListSync.MemberEntry]) -> [Channel] {
+        var byID: [Snowflake: ThreadListSync.MemberEntry] = [:]
+        for member in members { if let id = member.id { byID[id] = member } }
+        return threads.map { thread in
+            guard let entry = byID[thread.id] else { return thread }
+            var thread = thread
+            var member = entry.settings.applied(to: thread.member ?? ThreadMemberRef())
+            member.joinTimestamp = entry.joinTimestamp ?? member.joinTimestamp
+            thread.member = member
+            return thread
+        }
+    }
 }
 
 /// One page of `GET channels/{id}/messages/pins`: newest pin first, each
@@ -145,6 +174,14 @@ nonisolated protocol DiscordAPI: Sendable {
     func requestFriend(username: FriendUsername) async throws
     func createDM(recipient: Snowflake) async throws -> Channel
     func settingsProto() async throws -> String?
+    /// `PATCH channels/{thread}`: rename, close/reopen, lock/unlock. Returns the updated thread.
+    func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel
+    func deleteThread(_ thread: Snowflake) async throws
+    func joinThread(_ thread: Snowflake) async throws
+    func leaveThread(_ thread: Snowflake) async throws
+    /// `PATCH channels/{thread}/thread-members/@me/settings`. Returns the
+    /// updated thread member's settings, or nil for 204 (nothing changed).
+    func modifyThreadSettings(_ thread: Snowflake, fields: [String: JSONValue]) async throws -> ThreadMemberSettingsUpdate?
 }
 
 extension Emoji {
@@ -456,6 +493,33 @@ actor DiscordREST: DiscordAPI {
         try await request("POST", "users/@me/channels", body: ["recipients": .array([.string(recipient.description)])], route: "create-dm")
     }
 
+    func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel {
+        try await request("PATCH", "channels/\(thread)", body: patch.fields, route: "thread:\(thread)")
+    }
+
+    func deleteThread(_ thread: Snowflake) async throws {
+        _ = try await raw("DELETE", "channels/\(thread)", body: nil, route: "thread:\(thread)")
+    }
+
+    func joinThread(_ thread: Snowflake) async throws {
+        _ = try await raw("PUT", "channels/\(thread)/thread-members/@me", body: nil, route: "thread-members:\(thread)")
+    }
+
+    func leaveThread(_ thread: Snowflake) async throws {
+        _ = try await raw("DELETE", "channels/\(thread)/thread-members/@me", body: nil, route: "thread-members:\(thread)")
+    }
+
+    func modifyThreadSettings(_ thread: Snowflake, fields: [String: JSONValue]) async throws -> ThreadMemberSettingsUpdate? {
+        let data = try await raw("PATCH", "channels/\(thread)/thread-members/@me/settings", body: fields, route: "thread-settings:\(thread)")
+        // 204: Discord changed nothing.
+        guard !data.isEmpty else { return nil }
+        do {
+            return try decoder.decode(ThreadMemberSettingsUpdate.self, from: data)
+        } catch {
+            throw DiscordError.decoding("channels/\(thread)/thread-members/@me/settings")
+        }
+    }
+
     func settingsProto() async throws -> String? {
         struct Settings: Decodable { var settings: String }
         let settings: Settings = try await get("users/@me/settings-proto/1", route: "settings")
@@ -609,4 +673,11 @@ extension DiscordAPI {
     func requestFriend(username: FriendUsername) async throws { throw DiscordError.unauthorized }
     func createDM(recipient: Snowflake) async throws -> Channel { throw DiscordError.unauthorized }
     func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws { throw DiscordError.unauthorized }
+    func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel { throw DiscordError.unauthorized }
+    func deleteThread(_ thread: Snowflake) async throws { throw DiscordError.unauthorized }
+    func joinThread(_ thread: Snowflake) async throws { throw DiscordError.unauthorized }
+    func leaveThread(_ thread: Snowflake) async throws { throw DiscordError.unauthorized }
+    func modifyThreadSettings(_ thread: Snowflake, fields: [String: JSONValue]) async throws -> ThreadMemberSettingsUpdate? {
+        throw DiscordError.unauthorized
+    }
 }

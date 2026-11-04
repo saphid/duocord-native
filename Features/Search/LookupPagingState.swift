@@ -7,6 +7,7 @@ struct LookupPage<Row> {
     var total: Int? = nil
     var hasMore: Bool
     var firstMessages: [Snowflake: Message] = [:]
+    var reconcile: (@MainActor ([Row]) -> [Row])? = nil
 }
 
 struct SearchPageIdentity: Equatable {
@@ -118,7 +119,8 @@ final class LookupPagingState<Input: Equatable, Row: Identifiable> where Row.ID 
                     return
                 }
                 var seen = Set(current.rows.map(\.id))
-                let added = page.rows.filter { seen.insert($0.id).inserted }
+                let unique = page.rows.filter { seen.insert($0.id).inserted }
+                let added = page.reconcile?(unique) ?? unique
                 var firsts: [Snowflake: Message] = [:]
                 // Revalidate against the retained row, not a duplicate page's
                 // potentially different owner/guild. Missing-message fallback
@@ -178,7 +180,8 @@ extension LookupPage where Row == Message {
 }
 
 extension LookupPage where Row == Channel {
-    static func forum(_ result: ThreadSearchResult, forum: Channel) -> Self {
+    static func forum(_ result: ThreadSearchResult, forum: Channel,
+                      store: DiscordStore? = nil, since revision: Int? = nil) -> Self {
         let rows = result.threads.filter {
             $0.type.isThread && $0.parentID == forum.id &&
             ($0.guildID == nil || forum.guildID == nil || $0.guildID == forum.guildID)
@@ -191,7 +194,19 @@ extension LookupPage where Row == Channel {
                   firsts[post.id] == nil else { continue }
             firsts[post.id] = message
         }
-        return Self(rows: rows, consumed: result.threads.count, hasMore: result.hasMore, firstMessages: firsts)
+        var page = Self(rows: rows, consumed: result.threads.count, hasMore: result.hasMore, firstMessages: firsts)
+        if let store, let revision {
+            page.reconcile = { rows in
+                rows.compactMap { row in
+                    guard store.channelChanged(row.id, since: revision) else { return row }
+                    guard let current = store.channel(row.id), current.type.isThread,
+                          current.parentID == forum.id,
+                          current.guildID == nil || forum.guildID == nil || current.guildID == forum.guildID else { return nil }
+                    return current
+                }
+            }
+        }
+        return page
     }
 }
 
