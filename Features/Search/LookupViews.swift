@@ -300,6 +300,10 @@ struct InboxView: View {
     }
     @State private var tab = 0
     @State private var previews = InboxPreviews()
+    @AppStorage(InboxUnreadPreferenceKey.grouping) private var grouping = InboxUnreadOrganization.standard.grouping
+    @AppStorage(InboxUnreadPreferenceKey.filter) private var filter = InboxUnreadOrganization.standard.filter
+    @AppStorage(InboxUnreadPreferenceKey.sort) private var sort = InboxUnreadOrganization.standard.sort
+    @State private var unreadQuery = ""
 
     var body: some View {
         NavigationStack {
@@ -329,11 +333,37 @@ struct InboxView: View {
                         ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
                     }
                 } else {
-                    let unread = unreadChannels
-                    if unread.isEmpty { ContentUnavailableView("All Caught Up", systemImage: "checkmark.circle") }
+                    let unread = InboxLists.organizedUnreads(store: store, organization: organization.wrappedValue)
+                    if unread.isCaughtUp {
+                        ContentUnavailableView("All Caught Up", systemImage: "checkmark.circle")
+                    } else {
+                        InboxUnreadControls(organization: organization, reset: resetOrganization)
+                        if unread.isHiddenByOrganization {
+                            ContentUnavailableView {
+                                Label("No Matching Unreads", systemImage: "line.3.horizontal.decrease.circle")
+                            } description: {
+                                Text("Unread conversations are hidden by the current filter or search.")
+                            } actions: {
+                                Button("Show All Unreads") { filter = .all; unreadQuery = "" }
+                            }
+                        }
+                    }
                     // Previews load per visible row, never for the whole list at once.
-                    ForEach(unread) { channel in
-                        InboxUnreadRow(channel: channel, previews: previews)
+                    ForEach(unread.sections) { section in
+                        if let title = section.title {
+                            Section {
+                                unreadRows(section.rows)
+                            } header: {
+                                HStack {
+                                    Text(title).lineLimit(1)
+                                    Spacer()
+                                    Text("\(section.rows.count)").monospacedDigit()
+                                }
+                                .accessibilityElement(children: .combine)
+                            }
+                        } else {
+                            unreadRows(section.rows)
+                        }
                     }
                 }
             }
@@ -364,8 +394,26 @@ struct InboxView: View {
         await withTaskCancellationHandler { await request.value } onCancel: { request.cancel() }
     }
 
-    private var unreadChannels: [Channel] {
-        InboxLists.unreadChannels(store: store)
+    private var organization: Binding<InboxUnreadOrganization> {
+        Binding {
+            InboxUnreadOrganization(grouping: grouping, filter: filter, sort: sort, query: unreadQuery)
+        } set: { value in
+            if grouping != value.grouping { grouping = value.grouping }
+            if filter != value.filter { filter = value.filter }
+            if sort != value.sort { sort = value.sort }
+            if unreadQuery != value.query { unreadQuery = value.query }
+        }
+    }
+
+    private func resetOrganization() {
+        let standard = InboxUnreadOrganization.standard
+        grouping = standard.grouping; filter = standard.filter; sort = standard.sort; unreadQuery = ""
+    }
+
+    private func unreadRows(_ rows: [Channel]) -> some View {
+        ForEach(rows) { channel in
+            InboxUnreadRow(channel: channel, previews: previews)
+        }
     }
 }
 
