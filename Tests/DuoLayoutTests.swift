@@ -119,8 +119,10 @@ final class DuoLayoutTests: XCTestCase {
             guard heights.count >= 8 else { XCTFail("\(textSize): only \(heights.count) rows"); continue }
             XCTAssertGreaterThanOrEqual(heights.first ?? 0, 44, "\(textSize): row heights \(heights)")
             let line = UIFont.preferredFont(forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: textSize)).lineHeight
-            // Most cells are channel rows (two are category headers).
-            XCTAssertGreaterThanOrEqual(heights[heights.count / 2], line + 8, "\(textSize): names fill their rows \(heights)")
+            // Short names (welcome, general, Lounge…) stay on one line with room above and below;
+            // a wrapped two-line name doesn't count, so wrapping alone can't pass this.
+            let padded = heights.filter { $0 >= line + 8 && $0 < 2 * line }
+            XCTAssertGreaterThanOrEqual(padded.count, 4, "\(textSize): names fill their rows \(heights)")
             window.isHidden = true
             self.window = nil
         }

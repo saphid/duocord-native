@@ -85,6 +85,11 @@ final class ComposerPasteTests: XCTestCase {
         _ = input.perform(try XCTUnwrap(send.action), with: send)
         XCTAssertEqual(sends, 1)
         XCTAssertEqual(model.drafts[11]?.text, "line one\nline two", "the adapter only asks; ChatControls decides and sends")
+        // During an IME composition the key belongs to the input method.
+        input.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0))
+        XCTAssertNotNil(input.markedTextRange)
+        XCTAssertFalse((input.keyCommands ?? []).contains { $0.input == "\r" && $0.modifierFlags == .command })
+        input.unmarkText()
     }
 
     func testPastingImageDataAddsAnAttachmentAndKeepsText() throws {

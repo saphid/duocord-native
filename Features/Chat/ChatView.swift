@@ -1428,14 +1428,15 @@ struct ComposerTextInput: UIViewRepresentable {
         var commandHandler: ((KeyEquivalent) -> KeyPress.Result)?
         var sendHandler: (() -> Void)?
         override var keyCommands: [UIKeyCommand]? {
-            let send = UIKeyCommand(title: "Send", action: #selector(sendMessage), input: "\r", modifierFlags: .command)
-            send.wantsPriorityOverSystemBehavior = true
-            guard commandsEnabled else { return (super.keyCommands ?? []) + [send] }
+            // An unconfirmed IME composition keeps the key; it isn't text to send yet.
+            let send = markedTextRange == nil ? [UIKeyCommand(title: "Send", action: #selector(sendMessage), input: "\r", modifierFlags: .command)] : []
+            send.forEach { $0.wantsPriorityOverSystemBehavior = true }
+            guard commandsEnabled else { return (super.keyCommands ?? []) + send }
             return [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, "\r", "\t", UIKeyCommand.inputEscape].map {
                 let command = UIKeyCommand(input: $0, modifierFlags: [], action: #selector(chooseSuggestion))
                 command.wantsPriorityOverSystemBehavior = true
                 return command
-            } + [send]
+            } + send
         }
         @objc private func sendMessage(_ command: UIKeyCommand) { sendHandler?() }
         @objc private func chooseSuggestion(_ command: UIKeyCommand) {
