@@ -248,6 +248,61 @@ final class SidebarThreadUnreadTests: XCTestCase {
         XCTAssertFalse(InboxLists.unreadChannels(store: store).contains { $0.id == id })
     }
 
+    // MARK: Parent row
+
+    /// What ChannelList draws for a parent row and the thread rows under it.
+    private func badges(_ store: DiscordStore, _ row: DiscordStore.ChannelListEntry) -> (parent: ChannelRow.Badge, threads: [Snowflake: ChannelRow.Badge]) {
+        (ChannelRow.Badge(channel: row.channel, store: store),
+         Dictionary(uniqueKeysWithValues: row.threads.map { ($0.id, ChannelRow.Badge(channel: $0, store: store)) }))
+    }
+
+    func testReadParentRowDoesNotInheritThreadUnreadOrMentions() throws {
+        let unread = thread(1, last: 100, joinedAt: 0)
+        let mentioned = thread(2, last: 101)
+        let store = try store(threads: [unread, mentioned],
+                              readStates: [ReadState(id: mentioned.id, lastMessageID: sf(50), mentionCount: 2)])
+        XCTAssertFalse(store.isUnread(try XCTUnwrap(store.channel(prs))), "fixture: the parent itself is read")
+
+        for collapsed in [Set<Snowflake>(), [category]] {
+            let row = try XCTUnwrap(entry(store, prs, collapsed: collapsed))
+            let (parent, threads) = badges(store, row)
+            XCTAssertFalse(parent.unread, "a read parent is not styled unread by its threads (collapsed: \(collapsed))")
+            XCTAssertEqual(parent.mentions, 0, "thread mentions are badged on the thread row, not repeated on the parent")
+            XCTAssertEqual(parent.accessibilityValue, "", "a read parent is not announced with its threads' unread state")
+
+            // Each unread thread is still listed and drawn unread on its own row.
+            XCTAssertEqual(Set(threads.keys), [unread.id, mentioned.id])
+            XCTAssertEqual(threads[unread.id]?.unread, true)
+            XCTAssertEqual(threads[unread.id]?.mentions, 0)
+            XCTAssertEqual(threads[unread.id]?.accessibilityValue, "unread")
+            XCTAssertEqual(threads[mentioned.id]?.unread, true)
+            XCTAssertEqual(threads[mentioned.id]?.mentions, 2)
+            XCTAssertEqual(threads[mentioned.id]?.accessibilityValue, "unread, 2 mentions")
+
+            // Thread metadata still feeds the projection, the server rail and the Inbox.
+            XCTAssertEqual(row.rollup, DiscordStore.ThreadRollup(unreadThreads: 2, mentions: 2, mentionThreads: 1))
+        }
+        XCTAssertEqual(store.badge(for: guild), DiscordStore.GuildBadge(unread: true, mentions: 2))
+        XCTAssertEqual(Set(InboxLists.unreadChannels(store: store).map(\.id)).intersection([prs, unread.id, mentioned.id]),
+                       [unread.id, mentioned.id])
+    }
+
+    func testUnreadParentKeepsOnlyItsOwnActivityBesideUnreadThreads() throws {
+        let busy = thread(1, last: 100)
+        let store = try store(threads: [busy],
+                              readStates: [ReadState(id: prs, lastMessageID: sf(0), mentionCount: 1),
+                                           ReadState(id: busy.id, lastMessageID: sf(50), mentionCount: 2)])
+        let row = try XCTUnwrap(entry(store, prs))
+        let (parent, threads) = badges(store, row)
+        XCTAssertTrue(parent.unread)
+        XCTAssertEqual(parent.mentions, 1)
+        XCTAssertEqual(parent.accessibilityValue, "unread, 1 mention")
+        XCTAssertEqual(threads[busy.id]?.mentions, 2)
+        XCTAssertEqual(threads[busy.id]?.accessibilityValue, "unread, 2 mentions")
+        XCTAssertEqual(store.badge(for: guild), DiscordStore.GuildBadge(unread: true, mentions: 3),
+                       "the rail still sums the parent and its thread once each")
+    }
+
     // MARK: Accessibility
 
     func testCollapsedCategoryKeepsOwnMentionOnlyChannel() throws {
@@ -314,9 +369,8 @@ final class SidebarThreadUnreadTests: XCTestCase {
         XCTAssertEqual(BadgeAccessibility.rail(unread: true, mentions: 120), "Unread, 120 mentions")
         XCTAssertEqual(BadgeAccessibility.rail(unread: false, mentions: 1), "1 mention")
         XCTAssertEqual(BadgeAccessibility.rail(unread: true, mentions: 0), "Unread")
-        XCTAssertEqual(BadgeAccessibility.channel(unread: false, mentions: 2,
-                                                  rollup: .init(unreadThreads: 2, mentions: 3, mentionThreads: 1)),
-                       "2 unread threads, 5 mentions, 3 in threads")
+        XCTAssertEqual(BadgeAccessibility.channel(unread: false, mentions: 2), "2 mentions")
+        XCTAssertEqual(BadgeAccessibility.channel(unread: false, mentions: 0), "")
         XCTAssertEqual(BadgeAccessibility.channel(unread: true, mentions: 1), "unread, 1 mention")
         XCTAssertEqual(ThreadOverflowRow.title(hidden: 115, expanded: false), "115 more threads")
         XCTAssertEqual(ThreadOverflowRow.accessibilityLabel(hidden: 1, expanded: false, parent: "prs"), "Show 1 more thread in prs")
