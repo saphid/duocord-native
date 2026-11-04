@@ -3,6 +3,9 @@ import Foundation
 /// Standalone manual acks accept zero as the never-read boundary. Bulk acks
 /// require a positive message ID. Never derive a predecessor by subtracting an ID.
 nonisolated struct ReadAcknowledgement: Equatable, Sendable {
+    /// Conservative bulk size from user-API references; larger bodies may be rejected.
+    static let bulkLimit = 100
+
     var channel: Snowflake
     var message: Snowflake
     var manual = false

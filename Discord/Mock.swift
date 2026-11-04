@@ -87,7 +87,7 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                                      parentID: 910_000_000_000_000_102)
                 thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-3600))
                 thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
-                guild.threads = [thread]
+                guild.threads = [thread] + Self.manyThreads(guild: guildID)
             }
             if gIndex == 1 {
                 guild.emojis = ["swift_bird", "layout_grid"].enumerated().map { index, name in
@@ -176,19 +176,43 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     ]
     """#
 
+    /// The `DuocordMockManyThreads` debug launch argument gives #general 120
+    /// unread threads, more than one Discord ack-bulk request accepts.
+    private static let manyThreadsBase: UInt64 = 955_000_000_000_000_000
+    private static func manyThreads(guild: Snowflake) -> [Channel] {
+        #if DEBUG
+        guard UserDefaults.standard.bool(forKey: "DuocordMockManyThreads") else { return [] }
+        return (1...UInt64(120)).map { n in
+            var thread = Channel(id: Snowflake(manyThreadsBase + n), type: .publicThread, guildID: guild, name: "PR #\(n)",
+                                 parentID: generalChannel)
+            thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-Double(n) * 60))
+            thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
+            return thread
+        }
+        #else
+        return []
+        #endif
+    }
+    private static func isManyThreadsFixture(_ id: Snowflake) -> Bool {
+        id.raw > manyThreadsBase && id.raw <= manyThreadsBase + 120
+    }
+
     // MARK: READY
 
     func readyPayload() -> ReadyPayload {
         let members = guilds.map { guild in [Member(user: me, nick: nil, roles: [Snowflake(guild.id.raw + 901)])] }
         var reads: [ReadState] = []
+        let manyThreads = guilds.flatMap(\.threads).filter { Self.isManyThreadsFixture($0.id) }
         for guild in guilds {
             for channel in guild.channels where channel.type.isTextLike {
-                // A few unread channels with mentions, the rest read.
-                let unread = channel.id.raw % 3 == 0
+                // A few unread channels with mentions, the rest read. The many-threads
+                // parent is unread too, so its own state can be seen to survive.
+                let unread = channel.id.raw % 3 == 0 || (!manyThreads.isEmpty && channel.id == Self.generalChannel)
                 reads.append(ReadState(id: channel.id, lastMessageID: unread ? Snowflake(1) : channel.lastMessageID,
                                        mentionCount: unread && channel.id.raw % 2 == 0 ? Int(channel.id.raw % 4) + 1 : 0))
             }
         }
+        reads += manyThreads.map { ReadState(id: $0.id, lastMessageID: Snowflake(1), mentionCount: 0) }
         for dm in dms {
             reads.append(ReadState(id: dm.id, lastMessageID: dm.id.raw % 3 == 1 ? Snowflake(1) : dm.lastMessageID,
                                    mentionCount: dm.id.raw % 3 == 1 ? 2 : 0))
@@ -777,7 +801,13 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     func acknowledgeBulk(_ reads: [ReadAcknowledgement]) async throws {
         guard !reads.isEmpty else { return }
         guard reads.allSatisfy({ !$0.manual && $0.message > 0 }) else { throw DiscordError.http(0, "Invalid mock bulk acknowledgement") }
-        try await performRead(ReadRecord(route: "read-states/ack-bulk", fields: ["read_states": .array(reads.map(\.bulkFields))], reads: reads))
+        let record = ReadRecord(route: "read-states/ack-bulk", fields: ["read_states": .array(reads.map(\.bulkFields))], reads: reads)
+        // Model an endpoint that refuses oversized bodies and saves nothing.
+        guard reads.count <= ReadAcknowledgement.bulkLimit else {
+            lock.withLock { readRecords.append(record) }
+            throw DiscordError.http(400, "Invalid Form Body")
+        }
+        try await performRead(record)
     }
     func acknowledgeGuild(_ guild: Snowflake) async throws {
         let channels = guilds.first { $0.id == guild }.map { $0.channels + $0.threads } ?? []

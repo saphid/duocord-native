@@ -909,6 +909,103 @@ final class ReadStateTests: XCTestCase {
         await model.markThreadsAsRead(in: chat).value
         for id in eligible { XCTAssertNil(model.readErrors[id]); XCTAssertEqual(model.store.mentionCount(id), 0) }
     }
+
+    /// A busy parent (the PR-bot channel shape) with more unread threads than
+    /// one Discord ack-bulk request accepts, a mention on each.
+    private func busyParentFixture(threads count: Int = 120) -> (AppModel, MockDiscord, ReadyPayload, [Snowflake]) {
+        let (model, mock) = fixture()
+        var ready = mock.readyPayload()
+        let index = ready.guilds.firstIndex { $0.id == guild }!
+        for c in ready.guilds[index].channels.indices where ready.guilds[index].channels[c].type.isTextLike || ready.guilds[index].channels[c].type.isForumLike {
+            ready.guilds[index].channels[c].lastMessageID = 300
+        }
+        for t in ready.guilds[index].threads.indices { ready.guilds[index].threads[t].lastMessageID = 300 }
+        ready.guilds[index].threads += (0..<UInt64(count)).map { n in
+            var thread = Channel(id: Snowflake(970_000_000_000_000_000 + n), type: .publicThread, guildID: guild, name: "pr-\(n)",
+                                 parentID: chat, lastMessageID: Snowflake(400 + n))
+            thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
+            return thread
+        }
+        ready.readStates = (ready.guilds[index].channels + ready.guilds[index].threads)
+            .filter { $0.type.isTextLike || $0.type.isForumLike }.map { ReadState(id: $0.id, lastMessageID: 10, mentionCount: 1) }
+        mock.setReadStates(ready.readStates)
+        model.store.apply(ready: ready)
+        let threads = ready.guilds[index].threads.filter { $0.parentID == chat }.map(\.id)
+        return (model, mock, ready, threads)
+    }
+
+    private func chatEntry(_ model: AppModel) -> DiscordStore.ChannelListEntry? {
+        model.store.channelList(for: guild, expanded: [chat]).flatMap(\.entries).first { $0.channel.id == chat }
+    }
+
+    func testMarkThreadsAsReadClearsMoreThreadsThanOneBulkRequestAccepts() async throws {
+        let (model, mock, ready, threads) = busyParentFixture()
+        XCTAssertGreaterThan(threads.count, ReadAcknowledgement.bulkLimit)
+        XCTAssertEqual(chatEntry(model)?.threads.filter(model.store.showsUnread).count, threads.count)
+        await model.markThreadsAsRead(in: chat).value
+
+        // Every request fits Discord's limit and together they cover each thread once.
+        XCTAssertFalse(mock.readOperations.isEmpty)
+        for operation in mock.readOperations {
+            XCTAssertEqual(operation.route, "read-states/ack-bulk")
+            XCTAssertLessThanOrEqual(operation.reads.count, ReadAcknowledgement.bulkLimit)
+        }
+        let sent = mock.readOperations.flatMap(\.reads).map(\.channel)
+        XCTAssertEqual(sent.count, threads.count)
+        XCTAssertEqual(Set(sent), Set(threads))
+        XCTAssertNil(model.toast)
+
+        // Visible refresh: the rows ChannelList draws and the server badge.
+        for id in threads {
+            let thread = try XCTUnwrap(model.store.channel(id))
+            XCTAssertFalse(model.store.showsUnread(thread), "thread \(id) still drawn unread")
+            XCTAssertEqual(model.store.mentionCount(id), 0)
+            XCTAssertNil(model.readErrors[id])
+            XCTAssertEqual(model.readSaves[id], 0)
+        }
+        let entry = try XCTUnwrap(chatEntry(model))
+        XCTAssertTrue(entry.threads.allSatisfy { !model.store.showsUnread($0) })
+        XCTAssertFalse(entry.rollup.unread)
+        XCTAssertEqual(entry.rollup.mentions, 0)
+        // The parent and unrelated channels keep their own unread state.
+        XCTAssertTrue(model.store.isUnread(try XCTUnwrap(model.store.channel(chat))))
+        XCTAssertEqual(model.store.readStates[chat]?.lastMessageID, 10)
+        XCTAssertEqual(model.store.mentionCount(chat), 1)
+        XCTAssertEqual(model.store.readStates[other]?.lastMessageID, 10)
+
+        // Persistence: a fresh READY from the server's saved read states keeps them read.
+        var relaunch = ready
+        relaunch.readStates = mock.readyPayload().readStates
+        model.store.apply(ready: relaunch)
+        for id in threads { XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))), "thread \(id) unread after relaunch") }
+        XCTAssertTrue(model.store.isUnread(try XCTUnwrap(model.store.channel(chat))))
+    }
+
+    func testMarkThreadsAsReadKeepsConfirmedChunksWhenALaterChunkFails() async throws {
+        let (model, mock, _, threads) = busyParentFixture()
+        // The first request succeeds; the next one is refused.
+        mock.beforeReadResponse = { [mock] _ in mock.failNextRead = true }
+        await model.markThreadsAsRead(in: chat).value
+        mock.beforeReadResponse = nil
+        let operations = mock.readOperations
+        XCTAssertEqual(operations.count, 2)
+        guard operations.count == 2 else { return }
+        let confirmed = Set(operations[0].reads.map(\.channel)), refused = Set(operations[1].reads.map(\.channel))
+        XCTAssertEqual(confirmed.union(refused), Set(threads))
+        XCTAssertTrue(confirmed.isDisjoint(with: refused))
+        for id in confirmed {
+            XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))), "saved on the server, read here")
+            XCTAssertNil(model.readErrors[id])
+        }
+        for id in refused {
+            XCTAssertEqual(model.store.readStates[id]?.lastMessageID, 10, "No local success after HTTP failure")
+            XCTAssertEqual(model.store.mentionCount(id), 1)
+            XCTAssertNotNil(model.readErrors[id])
+        }
+        for id in threads { XCTAssertEqual(model.readSaves[id], 0) }
+        XCTAssertNotNil(model.toast)
+        XCTAssertEqual(model.store.readStates[chat]?.lastMessageID, 10)
+    }
 }
 
 private actor ReadGate {
