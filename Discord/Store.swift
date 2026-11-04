@@ -514,7 +514,8 @@ final class DiscordStore {
     }
 
     /// One channel row of the sidebar, the thread rows drawn under it and
-    /// the rollup its own row displays.
+    /// their rollup. The row itself draws only its own state; each thread's
+    /// activity stays on that thread's row.
     struct ChannelListEntry: Identifiable {
         var channel: Channel
         var threads: [Channel]
@@ -550,8 +551,8 @@ final class DiscordStore {
         }
     }
 
-    /// What a parent row shows for its threads. Each thread belongs to one
-    /// parent, so the server badge sums parents without counting twice.
+    /// What a parent's threads add to the server badge. Each thread belongs
+    /// to one parent, so the badge sums parents without counting twice.
     func threadRollup(for parent: Snowflake) -> ThreadRollup { rollup(of: sidebarThreads(in: parent)) }
 
     private func rollup(of threads: [Channel]) -> ThreadRollup {

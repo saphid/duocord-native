@@ -186,14 +186,9 @@ enum BadgeAccessibility {
         [unread ? "Unread" : nil, count > 0 ? mentions(count) : nil].compactMap { $0 }.joined(separator: ", ")
     }
 
-    /// A parent row speaks its own state, then what its threads add.
-    static func channel(unread: Bool, mentions own: Int, rollup: DiscordStore.ThreadRollup = .init()) -> String {
-        var parts: [String] = []
-        if unread { parts.append("unread") }
-        if rollup.unread { parts.append(rollup.unreadThreads == 1 ? "1 unread thread" : "\(rollup.unreadThreads) unread threads") }
-        let total = own + rollup.mentions
-        if total > 0 { parts.append(mentions(total) + (rollup.mentions > 0 ? ", \(rollup.mentions) in threads" : "")) }
-        return parts.joined(separator: ", ")
+    /// A channel or thread row speaks only its own state.
+    static func channel(unread: Bool, mentions count: Int) -> String {
+        [unread ? "unread" : nil, count > 0 ? mentions(count) : nil].compactMap { $0 }.joined(separator: ", ")
     }
 }
 
@@ -378,7 +373,7 @@ struct ChannelList: View {
                     }
                     // A collapsed category still shows unread or selected channels, like Discord.
                     ForEach(section.entries) { entry in
-                        ChannelRow(channel: entry.channel, isThread: entry.channel.type.isThread, rollup: entry.rollup)
+                        ChannelRow(channel: entry.channel, isThread: entry.channel.type.isThread)
                             .tag(entry.channel.id)
                         ForEach(entry.threads) { thread in
                             ChannelRow(channel: thread, isThread: true)
@@ -469,14 +464,26 @@ struct ChannelRow: View {
     @Environment(DiscordStore.self) private var store
     let channel: Channel
     var isThread = false
-    /// A parent row also reflects its threads; a thread row shows only its own.
-    var rollup = DiscordStore.ThreadRollup()
+
+    /// What a row draws and speaks: only its own unread and mention state.
+    /// As in Discord, a thread's activity stays on the thread's own row,
+    /// which the sidebar always lists while it needs attention.
+    struct Badge: Equatable {
+        var unread: Bool
+        var mentions: Int
+        var accessibilityValue: String
+
+        init(channel: Channel, store: DiscordStore) {
+            unread = store.showsUnread(channel)
+            mentions = store.mentionCount(channel.id)
+            accessibilityValue = BadgeAccessibility.channel(unread: unread, mentions: mentions)
+        }
+    }
 
     var body: some View {
-        let ownUnread = store.isUnread(channel) && !store.isMuted(channel)
-        let ownMentions = store.mentionCount(channel.id)
-        let unread = ownUnread || rollup.unread
-        let mentions = ownMentions + rollup.mentions
+        let badge = Badge(channel: channel, store: store)
+        let unread = badge.unread
+        let mentions = badge.mentions
         let selected = model.selectedChannel == channel.id
         HStack(spacing: 8) {
             if isThread {
@@ -525,7 +532,7 @@ struct ChannelRow: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(isThread ? "Thread" : Self.kind(for: channel)) \(channel.name ?? "")")
-        .accessibilityValue(BadgeAccessibility.channel(unread: ownUnread, mentions: ownMentions, rollup: rollup))
+        .accessibilityValue(badge.accessibilityValue)
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
         .contextMenu {
             ChannelReadButton(channel: channel.id)
