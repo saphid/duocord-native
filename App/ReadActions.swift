@@ -124,6 +124,19 @@ extension AppModel {
             defer { self.unreadTargetOperations[intent] = nil }
             guard self.readSession == session, self.store.readEpoch == epoch else { return }
             var resolved = reads
+            var versions: [Snowflake: ReadVersion] = [:]
+            // Reads Discord has confirmed, in order. They stay applied when a later request fails.
+            var confirmed = 0
+            func applyConfirmed() {
+                for read in resolved.prefix(confirmed) {
+                    if self.store.applyRead(read, version: versions[read.channel]!, intent: intent, preservingMentions: preservingMentions) {
+                        self.recordReadPresentation(read, target: unread.flatMap { self.unreadTargetOperations[intent]?.surviving($0.id) },
+                                                    automatic: automatic, visit: visit)
+                    }
+                    if self.store.readIntents[read.channel] == intent { self.readErrors[read.channel] = nil }
+                }
+                self.updateBadge()
+            }
             defer {
                 if self.readSession == session, self.store.readEpoch == epoch {
                     for read in reads {
@@ -166,26 +179,30 @@ extension AppModel {
                     }
                 }
                 guard self.readSession == session, self.store.readEpoch == epoch else { return }
-                let versions = Dictionary(uniqueKeysWithValues: resolved.map { read in
+                versions = Dictionary(uniqueKeysWithValues: resolved.map { read in
                     var version = self.store.readVersion(read.channel)
                     if !read.manual { version.mentions = capturedVersions[read.channel]!.mentions }
                     return (read.channel, version)
                 })
                 for read in resolved { self.store.registerReadEcho(read, intent: intent, releasesHold: !automatic && !read.manual) }
-                if bulk { try await api.acknowledgeBulk(resolved) }
-                else { for read in resolved { try await api.acknowledge(read) } }
-                guard self.readSession == session, self.store.readEpoch == epoch else { return }
-                for read in resolved {
-                    if self.store.applyRead(read, version: versions[read.channel]!, intent: intent, preservingMentions: preservingMentions) {
-                        self.recordReadPresentation(read, target: unread.flatMap { self.unreadTargetOperations[intent]?.surviving($0.id) },
-                                                    automatic: automatic, visit: visit)
+                if bulk {
+                    // Keep busy parents and large servers within the conservative
+                    // bulk request limit documented by user-API references.
+                    while confirmed < resolved.count {
+                        if confirmed > 0 { guard self.readSession == session, self.store.readEpoch == epoch else { return } }
+                        let chunk = Array(resolved[confirmed..<min(confirmed + ReadAcknowledgement.bulkLimit, resolved.count)])
+                        try await api.acknowledgeBulk(chunk)
+                        confirmed += chunk.count
                     }
-                    if self.store.readIntents[read.channel] == intent { self.readErrors[read.channel] = nil }
+                } else {
+                    for read in resolved { try await api.acknowledge(read); confirmed += 1 }
                 }
-                self.updateBadge()
+                guard self.readSession == session, self.store.readEpoch == epoch else { return }
+                applyConfirmed()
             } catch {
                 guard self.readSession == session, self.store.readEpoch == epoch else { return }
-                for read in resolved where self.store.readIntents[read.channel] == intent {
+                if confirmed > 0 { applyConfirmed() }
+                for read in resolved.dropFirst(confirmed) where self.store.readIntents[read.channel] == intent {
                     // A gateway echo remains authoritative when the HTTP
                     // response is lost. Apply presentation only for that echo.
                     if self.store.readWasEchoed(read.channel, intent: intent) {
