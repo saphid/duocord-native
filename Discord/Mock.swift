@@ -787,6 +787,22 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     func setReadHistory(_ messages: [Message], channel: Snowflake) {
         lock.withLock { histories[channel] = messages.sorted { $0.id < $1.id } }
     }
+    /// Models Discord's ack-bulk rate limit: after this many accepted bulk
+    /// requests in a window, the next is refused with a 429 that saves nothing,
+    /// and the window starts again. Nil (the default) never limits. The
+    /// `DuocordMockBulkRateLimit` launch argument sets it to 1.
+    private var bulkWindow: Int? = UserDefaults.standard.bool(forKey: "DuocordMockBulkRateLimit") ? 1 : nil
+    private var bulkAcceptedInWindow = 0
+    var bulkReadsPerWindow: Int? {
+        get { lock.withLock { bulkWindow } }
+        set { lock.withLock { bulkWindow = newValue; bulkAcceptedInWindow = 0 } }
+    }
+    private var bulkRetry = 0.05
+    /// Retry-after, in seconds, carried by modelled 429s.
+    var bulkRetryAfter: Double {
+        get { lock.withLock { bulkRetry } }
+        set { lock.withLock { bulkRetry = newValue } }
+    }
     #endif
 
     private func performRead(_ record: ReadRecord) async throws {
@@ -832,6 +848,18 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
             lock.withLock { readRecords.append(record) }
             throw DiscordError.http(400, "Invalid Form Body")
         }
+        #if DEBUG
+        let limited = lock.withLock { () -> Bool in
+            guard let window = bulkWindow else { return false }
+            if bulkAcceptedInWindow >= window { bulkAcceptedInWindow = 0; return true }
+            bulkAcceptedInWindow += 1
+            return false
+        }
+        if limited {
+            lock.withLock { readRecords.append(record) }
+            throw DiscordError.rateLimited(retryAfter: bulkRetryAfter)
+        }
+        #endif
         try await performRead(record)
     }
     func acknowledgeGuild(_ guild: Snowflake) async throws {

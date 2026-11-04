@@ -49,13 +49,13 @@ extension AppModel {
 
     @discardableResult
     func markServerAsRead(_ guild: Snowflake) -> Task<Void, Never> {
-        enqueueRead(eligibleReadChannels.filter { $0.guildID == guild }.compactMap(capturedRead), bulk: true)
+        enqueueRead(eligibleReadChannels.filter { $0.guildID == guild && needsBulkRead($0) }.compactMap(capturedRead), bulk: true)
     }
 
     @discardableResult
     func markAllAsRead() -> Task<Void, Never> {
-        // Full eligible set; Inbox's presentation prefix is deliberately irrelevant.
-        enqueueRead(eligibleReadChannels.compactMap(capturedRead), bulk: true)
+        // Every eligible channel needing a read; Inbox's presentation prefix is deliberately irrelevant.
+        enqueueRead(eligibleReadChannels.filter(needsBulkRead).compactMap(capturedRead), bulk: true)
     }
 
     /// A parent's threads only; the parent and other channels keep their state.
@@ -63,7 +63,7 @@ extension AppModel {
     /// already known (not just the sidebar's prefix) are included.
     @discardableResult
     func markThreadsAsRead(in parent: Snowflake) -> Task<Void, Never> {
-        enqueueRead(eligibleThreads(in: parent).sorted { $0.id < $1.id }.compactMap(capturedRead), bulk: true)
+        enqueueRead(eligibleThreads(in: parent).filter(needsBulkRead).sorted { $0.id < $1.id }.compactMap(capturedRead), bulk: true)
     }
 
     func eligibleThreads(in parent: Snowflake) -> [Channel] {
@@ -78,6 +78,16 @@ extension AppModel {
         (channel.type.isTextLike || channel.type.isForumLike) && (channel.guildID == nil || store.canView(channel))
             && (channel.type != .privateThread || store.joinedThreads.contains(channel.id) || channel.ownerID == store.me?.id
                 || store.permissions(in: channel) & Permission.manageThreads != 0)
+    }
+
+    /// Bulk actions include unread channels, local progress awaiting server
+    /// confirmation, mention counts, and read writes still queued (the FIFO may change
+    /// them before this one runs). Already-read channels and ones Discord keeps
+    /// no read state for only add ack-bulk requests and can exhaust the rate
+    /// limit before the unread channels are reached.
+    private func needsBulkRead(_ channel: Channel) -> Bool {
+        store.isUnread(channel) || store.hasUnconfirmedRead(channel.id)
+            || store.mentionCount(channel.id) > 0 || store.pendingReadChannels.contains(channel.id)
     }
 
     private func capturedRead(_ channel: Channel) -> ReadAcknowledgement? {
@@ -188,11 +198,24 @@ extension AppModel {
                 if bulk {
                     // Keep busy parents and large servers within the conservative
                     // bulk request limit documented by user-API references.
+                    var limited = 0
                     while confirmed < resolved.count {
-                        if confirmed > 0 { guard self.readSession == session, self.store.readEpoch == epoch else { return } }
+                        if confirmed > 0 || limited > 0 { guard self.readSession == session, self.store.readEpoch == epoch else { return } }
                         let chunk = Array(resolved[confirmed..<min(confirmed + ReadAcknowledgement.bulkLimit, resolved.count)])
-                        try await api.acknowledgeBulk(chunk)
+                        do {
+                            try await api.acknowledgeBulk(chunk)
+                        } catch DiscordError.rateLimited(let wait)
+                                    where limited < ReadAcknowledgement.bulkRateLimitRetries && wait <= ReadAcknowledgement.bulkRateLimitMaxWait {
+                            // A 429 saved nothing. Within this one tap, wait out
+                            // Discord's retry-after and send the same captured chunk
+                            // again, a bounded number of times. Other failures,
+                            // other writes and single-channel reads are never resent.
+                            limited += 1
+                            try await Task.sleep(for: .seconds(wait))
+                            continue
+                        }
                         confirmed += chunk.count
+                        limited = 0
                     }
                 } else {
                     for read in resolved { try await api.acknowledge(read); confirmed += 1 }
