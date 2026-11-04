@@ -232,13 +232,24 @@ final class DiscordStore {
     @ObservationIgnored private var readServerFloor: Int?
     @ObservationIgnored private var readVersions: [Snowflake: ReadVersion] = [:]
 
+    /// Reader progress can clear local badges before its debounced server ack.
+    @ObservationIgnored private var localReadProgress: [Snowflake: (message: Snowflake, version: Int)] = [:]
+
+    func hasUnconfirmedRead(_ channel: Snowflake) -> Bool { localReadProgress[channel] != nil }
+
+    private func confirmLocalRead(_ channel: Snowflake, through message: Snowflake, version: Int) {
+        if let local = localReadProgress[channel], local.message <= message, local.version <= version {
+            localReadProgress[channel] = nil
+        }
+    }
+
     func readVersion(_ channel: Snowflake) -> ReadVersion { readVersions[channel] ?? ReadVersion() }
 
     private func resetReadOperations() {
         onReadReset?()
         readEpoch = UUID()
         readEchoes = [:]; readServerVersions = [:]; readServerFloor = nil
-        readWriteSequence = 0; confirmedReadSequences = [:]
+        readWriteSequence = 0; confirmedReadSequences = [:]; localReadProgress = [:]
         manualUnreadChannels = []; pendingReadChannels = []; pendingUnreadChannels = []; readIntents = [:]; readVersions = [:]
     }
 
@@ -282,6 +293,8 @@ final class DiscordStore {
             }
         }
         readStates[read.channel] = state
+        if read.manual, current.boundary == version.boundary { localReadProgress[read.channel] = nil }
+        else if !read.manual { confirmLocalRead(read.channel, through: read.message, version: version.boundary) }
         if !read.manual, current.boundary == version.boundary, let boundary = state.lastMessageID {
             onAcceptedRead?(read.channel, boundary)
         }
@@ -346,6 +359,11 @@ final class DiscordStore {
             } else {
                 state.lastMessageID = max(id, state.lastMessageID ?? 0)
                 if releasesHold { manualUnreadChannels.remove(ack.channelID) }
+            }
+            if ack.manual == true { localReadProgress[ack.channelID] = nil }
+            else {
+                confirmLocalRead(ack.channelID, through: id,
+                                 version: localEcho?.capturedVersion.boundary ?? previousBoundaryVersion)
             }
             version.boundary += 1
         }
@@ -1372,6 +1390,7 @@ final class DiscordStore {
         let advancedBoundary = message > (state.lastMessageID ?? 0)
         state.lastMessageID = max(message, state.lastMessageID ?? 0)
         state.mentionCount = 0
+        localReadProgress[channel] = (state.lastMessageID ?? message, readVersion(channel).boundary)
         readStates[channel] = state
         if advancedBoundary, let boundary = state.lastMessageID { onAcceptedRead?(channel, boundary) }
     }

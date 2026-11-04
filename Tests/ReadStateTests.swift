@@ -68,8 +68,10 @@ final class ReadStateTests: XCTestCase {
 
     func testServerCapturedBulkIncludesAccessibleThreads() async throws {
         let (model, mock) = fixture()
-        let expected = Set(model.eligibleReadChannels.filter { $0.guildID == guild && $0.lastMessageID != nil }.map(\.id))
-        XCTAssertTrue(model.eligibleReadChannels.contains { $0.guildID == guild && $0.type.isThread })
+        // Channels already read (here, the forum Discord keeps no read state for) are not sent.
+        let expected = Set(model.eligibleReadChannels.filter { $0.guildID == guild && $0.lastMessageID != nil && model.store.isUnread($0) }.map(\.id))
+        XCTAssertTrue(model.eligibleReadChannels.contains { $0.guildID == guild && $0.type.isThread && model.store.isUnread($0) })
+        XCTAssertTrue(model.eligibleReadChannels.contains { $0.guildID == guild && $0.lastMessageID != nil && !model.store.isUnread($0) })
         await model.markServerAsRead(guild).value
         let operation = try XCTUnwrap(mock.readOperations.first)
         XCTAssertEqual(operation.route, "read-states/ack-bulk")
@@ -80,7 +82,7 @@ final class ReadStateTests: XCTestCase {
 
     func testAllReadIncludesFullSetBeyondFiftyAndDMs() async throws {
         let (model, mock) = fixture()
-        let expected = Set(model.eligibleReadChannels.compactMap { $0.lastMessageID == nil ? nil : $0.id })
+        let expected = Set(model.eligibleReadChannels.compactMap { $0.lastMessageID == nil || !model.store.isUnread($0) ? nil : $0.id })
         XCTAssertGreaterThan(expected.count, 50)
         await model.markAllAsRead().value
         XCTAssertEqual(Set(mock.readOperations.first!.reads.map(\.channel)), expected)
@@ -1004,6 +1006,229 @@ final class ReadStateTests: XCTestCase {
         }
         for id in threads { XCTAssertEqual(model.readSaves[id], 0) }
         XCTAssertNotNil(model.toast)
+        XCTAssertEqual(model.store.readStates[chat]?.lastMessageID, 10)
+    }
+
+    // MARK: Issue #20, mark-all-read on a real account shape under Discord's ack-bulk rate limit
+
+    /// Most channels already read (as on a real account), a few unread ones
+    /// whose IDs sort after the read ones, and channels Discord has no read
+    /// state for. Returns the channels that are unread before the action.
+    private func mostlyReadAccountFixture(read count: Int = 250) -> (AppModel, MockDiscord, [Snowflake]) {
+        let (model, mock) = fixture()
+        var ready = mock.readyPayload()
+        let index = ready.guilds.firstIndex { $0.id == guild }!
+        for g in ready.guilds.indices {
+            for c in ready.guilds[g].channels.indices where ready.guilds[g].channels[c].type.isTextLike || ready.guilds[g].channels[c].type.isForumLike {
+                ready.guilds[g].channels[c].lastMessageID = 300
+            }
+            for t in ready.guilds[g].threads.indices { ready.guilds[g].threads[t].lastMessageID = 300 }
+        }
+        ready.guilds[index].channels += (0..<UInt64(count)).map { n in
+            Channel(id: Snowflake(930_000_000_000_000_000 + n), type: .text, guildID: guild, name: "read-\(n)", lastMessageID: 300)
+        }
+        let unread = (0..<UInt64(10)).map { Snowflake(940_000_000_000_000_000 + $0) }
+        ready.guilds[index].channels += unread.map { Channel(id: $0, type: .text, guildID: guild, name: "unread-\($0)", lastMessageID: 300) }
+        for d in ready.privateChannels.indices { ready.privateChannels[d].lastMessageID = 300 }
+        // Every text channel has a read state at its latest message except the
+        // unread ones. Some known channels (forums) have no read state at all.
+        ready.readStates = (ready.guilds.flatMap { $0.channels + $0.threads } + ready.privateChannels)
+            .filter { $0.type.isTextLike }
+            .map { channel in
+                unread.contains(channel.id) ? ReadState(id: channel.id, lastMessageID: 10, mentionCount: 1)
+                    : ReadState(id: channel.id, lastMessageID: 300, mentionCount: 0)
+            }
+        mock.setReadStates(ready.readStates)
+        model.store.apply(ready: ready)
+        let unreadNow = model.eligibleReadChannels.filter { model.store.isUnread($0) || model.store.mentionCount($0.id) > 0 }.map(\.id)
+        XCTAssertEqual(Set(unreadNow), Set(unread))
+        return (model, mock, unread)
+    }
+
+    private func savedOnServer(_ mock: MockDiscord) -> [Snowflake: ReadState] {
+        Dictionary(uniqueKeysWithValues: mock.readyPayload().readStates.map { ($0.id, $0) })
+    }
+
+    func testMarkAllAsReadClearsUnreadChannelsOnMostlyReadAccountUnderBulkRateLimit() async throws {
+        let (model, mock, unread) = mostlyReadAccountFixture()
+        XCTAssertGreaterThan(model.eligibleReadChannels.count, 2 * ReadAcknowledgement.bulkLimit)
+        mock.bulkReadsPerWindow = 1
+        await model.markAllAsRead().value
+
+        XCTAssertNil(model.toast, "Mark All Read reported a failure")
+        let saved = savedOnServer(mock)
+        for id in unread {
+            XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))), "channel \(id) still unread")
+            XCTAssertEqual(model.store.mentionCount(id), 0)
+            XCTAssertNil(model.readErrors[id])
+            XCTAssertEqual(saved[id]?.lastMessageID, 300, "channel \(id) not saved on the server")
+        }
+        XCTAssertEqual(model.store.totalBadge, 0)
+        // Only channels that needed it were sent, in one request.
+        XCTAssertEqual(mock.readOperations.count, 1)
+        XCTAssertEqual(Set(mock.readOperations.flatMap(\.reads).map(\.channel)), Set(unread))
+        XCTAssertTrue(model.readSaves.values.allSatisfy { $0 == 0 })
+    }
+
+    func testMarkServerAsReadSkipsChannelsAlreadyRead() async throws {
+        let (model, mock, unread) = mostlyReadAccountFixture()
+        await model.markServerAsRead(guild).value
+        XCTAssertEqual(Set(mock.readOperations.flatMap(\.reads).map(\.channel)), Set(unread))
+        XCTAssertFalse(model.store.badge(for: guild).unread)
+        XCTAssertNil(model.toast)
+    }
+
+    func testBulkReadIncludesLocallyReadChannelsBeforeAutomaticAckAndAfterNavigation() async throws {
+        try await bulkReadIncludesLocalProgress(automatic: true)
+    }
+
+    func testBulkReadIncludesLocallyReadChannelsWithAutomaticAckDisabled() async throws {
+        try await bulkReadIncludesLocalProgress(automatic: false)
+    }
+
+    private func bulkReadIncludesLocalProgress(automatic: Bool) async throws {
+        for action in ["threads", "server", "all"] {
+            let (model, mock) = fixture()
+            let old = model.settings.markReadOnServer
+            defer { model.settings.markReadOnServer = old }
+            model.settings.markReadOnServer = automatic
+            let target = action == "threads" ? try XCTUnwrap(model.eligibleThreads(in: chat).first?.id) : chat
+            model.selectedChannel = target
+            model.didRead(channel: target, upTo: 300)
+            XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(target))))
+            XCTAssertEqual(model.store.mentionCount(target), 0)
+            XCTAssertFalse(model.store.pendingReadChannels.contains(target))
+            let save: Task<Void, Never>
+            switch action {
+            case "threads": save = model.markThreadsAsRead(in: chat)
+            case "server": save = model.markServerAsRead(guild)
+            default: save = model.markAllAsRead()
+            }
+            model.selectedChannel = nil // cancels any reader debounce
+            await save.value
+            XCTAssertTrue(mock.readOperations.flatMap(\.reads).contains { $0.channel == target && $0.message == 300 }, action)
+            XCTAssertEqual(savedOnServer(mock)[target]?.lastMessageID, 300, action)
+            let count = mock.readOperations.count
+            switch action {
+            case "threads": await model.markThreadsAsRead(in: chat).value
+            case "server": await model.markServerAsRead(guild).value
+            default: await model.markAllAsRead().value
+            }
+            XCTAssertEqual(mock.readOperations.count, count, "Confirmed reads must be skipped")
+        }
+    }
+
+    func testLocalReadProgressClearsOnlyThroughAcceptedServerBoundaryOrReset() async {
+        let (model, _) = fixture()
+        let old = model.settings.markReadOnServer
+        defer { model.settings.markReadOnServer = old }
+        model.settings.markReadOnServer = false
+        model.didRead(channel: chat, upTo: 300)
+        XCTAssertTrue(model.store.hasUnconfirmedRead(chat))
+        await ack(model, "{\"channel_id\":\"\(chat)\",\"message_id\":\"100\",\"mention_count\":0}")
+        XCTAssertTrue(model.store.hasUnconfirmedRead(chat), "Earlier server progress does not confirm the local boundary")
+        await ack(model, "{\"channel_id\":\"\(chat)\",\"message_id\":\"300\",\"mention_count\":0}")
+        XCTAssertFalse(model.store.hasUnconfirmedRead(chat))
+        model.store.markRead(chat, upTo: 400)
+        XCTAssertTrue(model.store.hasUnconfirmedRead(chat))
+        model.store.reset()
+        XCTAssertFalse(model.store.hasUnconfirmedRead(chat))
+    }
+
+    /// More unread channels than one bulk request holds: the refused chunk is
+    /// sent again after Discord's retry-after, and nothing is sent twice once saved.
+    func testBulkReadsWaitOutRateLimitAndFinishEveryChunk() async throws {
+        for action in ["threads", "server", "all"] {
+            let (model, mock, ready, threads) = busyParentFixture()
+            mock.bulkReadsPerWindow = 1
+            let before = Set(model.eligibleReadChannels.filter(model.store.isUnread).map(\.id))
+            let expected = action == "threads" ? Set(threads) : before
+            XCTAssertGreaterThan(expected.count, ReadAcknowledgement.bulkLimit)
+            switch action {
+            case "threads": await model.markThreadsAsRead(in: chat).value
+            case "server": await model.markServerAsRead(guild).value
+            default: await model.markAllAsRead().value
+            }
+            mock.bulkReadsPerWindow = nil
+
+            XCTAssertNil(model.toast, "\(action): rate limit surfaced as a failure")
+            let operations = mock.readOperations
+            XCTAssertTrue(operations.allSatisfy { $0.route == "read-states/ack-bulk" && $0.reads.count <= ReadAcknowledgement.bulkLimit })
+            // Accepted, refused (429), the same chunk again: no other request.
+            XCTAssertEqual(operations.count, 3, action)
+            guard operations.count == 3 else { continue }
+            XCTAssertEqual(operations[1].reads, operations[2].reads, "\(action): resend is the refused chunk unchanged")
+            XCTAssertEqual(Set(operations[0].reads.map(\.channel)).union(operations[2].reads.map(\.channel)), expected)
+            let saved = savedOnServer(mock)
+            for id in expected {
+                XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))), "\(action): \(id) still unread")
+                XCTAssertNil(model.readErrors[id])
+                XCTAssertEqual(model.readSaves[id], 0)
+                XCTAssertEqual(saved[id]?.lastMessageID, model.store.channel(id)?.lastMessageID, "\(action): \(id) not saved")
+            }
+            if action == "threads" {
+                XCTAssertTrue(model.store.isUnread(try XCTUnwrap(model.store.channel(chat))), "parent keeps its own state")
+            }
+            var relaunch = ready
+            relaunch.readStates = mock.readyPayload().readStates
+            model.store.apply(ready: relaunch)
+            for id in expected { XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))), "\(action): \(id) unread after relaunch") }
+        }
+    }
+
+    /// Recovery is bounded: a limit that never lifts ends as the usual
+    /// failure, refused channels keep their state, confirmed chunks stay read.
+    func testPersistentBulkRateLimitGivesUpAfterBoundedRetries() async throws {
+        let (model, mock, _, threads) = busyParentFixture()
+        mock.bulkRetryAfter = 0.01
+        mock.bulkReadsPerWindow = 1
+        // Every request after the first is refused.
+        mock.beforeReadResponse = { [mock] _ in mock.bulkReadsPerWindow = 0 }
+        await model.markThreadsAsRead(in: chat).value
+        mock.beforeReadResponse = nil; mock.bulkReadsPerWindow = nil
+        let operations = mock.readOperations
+        XCTAssertEqual(operations.count, 2 + ReadAcknowledgement.bulkRateLimitRetries)
+        let confirmed = Set(try XCTUnwrap(operations.first).reads.map(\.channel))
+        XCTAssertEqual(confirmed.count, ReadAcknowledgement.bulkLimit)
+        for id in threads {
+            if confirmed.contains(id) {
+                XCTAssertFalse(model.store.isUnread(try XCTUnwrap(model.store.channel(id))))
+                XCTAssertNil(model.readErrors[id])
+            } else {
+                XCTAssertEqual(model.store.readStates[id]?.lastMessageID, 10, "No local success after a refusal")
+                XCTAssertNotNil(model.readErrors[id])
+            }
+            XCTAssertEqual(model.readSaves[id], 0)
+        }
+        XCTAssertNotNil(model.toast)
+    }
+
+    /// A Discord limit longer than the bound is reported, not waited out in the queue.
+    func testLongBulkRetryAfterIsNotWaitedOut() async throws {
+        let (model, mock, _, threads) = busyParentFixture()
+        mock.bulkRetryAfter = ReadAcknowledgement.bulkRateLimitMaxWait + 1
+        mock.bulkReadsPerWindow = 0
+        let start = ContinuousClock.now
+        await model.markThreadsAsRead(in: chat).value
+        mock.bulkReadsPerWindow = nil
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(5))
+        XCTAssertEqual(mock.readOperations.count, 1)
+        for id in threads {
+            XCTAssertEqual(model.store.readStates[id]?.lastMessageID, 10)
+            XCTAssertNotNil(model.readErrors[id])
+        }
+        XCTAssertNotNil(model.toast)
+    }
+
+    /// Bounded recovery is only for bulk reads: a single channel read refused
+    /// with a 429 is not resent (Mark as Read, alerts and manual unread go out once).
+    func testSingleChannelReadIsNotResentAfterRateLimit() async throws {
+        let (model, mock) = fixture()
+        mock.beforeReadResponse = { _ in throw DiscordError.rateLimited(retryAfter: 0.01) }
+        await model.markAsRead(channel: chat).value
+        mock.beforeReadResponse = nil
+        XCTAssertEqual(mock.readOperations.count, 1)
+        XCTAssertNotNil(model.readErrors[chat])
         XCTAssertEqual(model.store.readStates[chat]?.lastMessageID, 10)
     }
 }

@@ -5,6 +5,10 @@ import Foundation
 nonisolated struct ReadAcknowledgement: Equatable, Sendable {
     /// Conservative bulk size from user-API references; larger bodies may be rejected.
     static let bulkLimit = 100
+    /// A bulk chunk refused with a 429 is sent again after Discord's retry-after
+    /// at most this many times, and only when that wait is at most `bulkRateLimitMaxWait` seconds.
+    static let bulkRateLimitRetries = 3
+    static let bulkRateLimitMaxWait = 30.0
 
     var channel: Snowflake
     var message: Snowflake
