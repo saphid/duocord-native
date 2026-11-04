@@ -883,6 +883,41 @@ final class NotificationAlertActionTests: XCTestCase {
         XCTAssertEqual(center.records.map { $0.content.userInfo["message"] as? String }, ["150"])
     }
 
+    /// A joined thread without a saved read state is read through its join
+    /// time (issue #5). An alert for an older message must not lower that.
+    func testMarkAsReadUsesJoinedThreadReadBoundary() async throws {
+        let mock = MockDiscord(), center = FakeReadNotificationDelivery()
+        let service = NotificationService(delivery: center, authorized: true, loadAttachment: { _ in nil })
+        let model = AppModel(readAPI: mock, notifications: service)
+        model.connectAlertActions(service)
+        let base = Date(timeIntervalSince1970: 1_780_000_000)
+        func at(_ seconds: Double) -> Snowflake { Snowflake.at(base.addingTimeInterval(seconds)) }
+        var ready = payload(mock)
+        let index = try XCTUnwrap(ready.guilds[0].threads.firstIndex { $0.id == openThread })
+        ready.guilds[0].threads[index].member = ThreadMemberRef(joinTimestamp: ISO8601DateFormatter().string(from: base.addingTimeInterval(50)))
+        ready.guilds[0].threads[index].lastMessageID = at(100)
+        ready.readStates.removeAll { $0.id == openThread }
+        mock.setReadStates(ready.readStates)
+        model.store.apply(ready: ready)
+        let thread = try XCTUnwrap(model.store.channel(openThread))
+        XCTAssertEqual(model.store.readBoundary(thread), at(50))
+        XCTAssertTrue(model.store.isUnread(thread))
+
+        // At or before the join time: already read there, so nothing is written.
+        let older = await service.handle(response(markRead, message: at(10), channel: openThread))
+        XCTAssertEqual(older, .unchanged)
+        XCTAssertTrue(mock.readOperations.isEmpty)
+        XCTAssertNil(model.store.readStates[openThread])
+        XCTAssertEqual(model.store.readBoundary(try XCTUnwrap(model.store.channel(openThread))), at(50))
+
+        // Past the join time: acknowledges through the notified message only.
+        let newer = await service.handle(response(markRead, message: at(70), channel: openThread))
+        XCTAssertEqual(newer, .markedRead)
+        XCTAssertEqual(mock.readOperations.last?.reads, [ReadAcknowledgement(channel: openThread, message: at(70))])
+        XCTAssertEqual(model.store.readStates[openThread]?.lastMessageID, at(70))
+        XCTAssertTrue(model.store.isUnread(try XCTUnwrap(model.store.channel(openThread))))
+    }
+
     func testMarkAsReadInDebugRealSessionIsRefusedBeforeAnyWireRequest() async {
         AlertActionWireNetwork.reset()
         let center = FakeReadNotificationDelivery()

@@ -114,6 +114,7 @@ nonisolated enum DiscordError: Error, LocalizedError {
 /// Everything the app asks of Discord's HTTP API. Live and mock
 /// implementations conform; nothing else talks to the network directly.
 nonisolated protocol DiscordAPI: Sendable {
+    func channel(_ id: Snowflake) async throws -> Channel
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message]
     /// The first page of pins only (up to 50). Lists use `pinPage`.
     func pins(channel: Snowflake) async throws -> [Message]
@@ -157,6 +158,9 @@ extension Emoji {
 }
 
 extension DiscordAPI {
+    func channel(_ id: Snowflake) async throws -> Channel {
+        throw DiscordError.decoding("Channel lookup is unavailable for this transport")
+    }
     func publicArchivedThreads(channel: Snowflake, before: String?) async throws -> ArchivedThreadPage {
         throw DiscordError.decoding("Public archived-thread paging is unavailable for this transport")
     }
@@ -208,6 +212,10 @@ actor DiscordREST: DiscordAPI {
     }
 
     // MARK: Endpoints
+
+    func channel(_ id: Snowflake) async throws -> Channel {
+        try await get("channels/\(id)", route: "channel:\(id)")
+    }
 
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message] {
         var query = [URLQueryItem(name: "limit", value: String(limit))]

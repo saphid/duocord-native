@@ -48,6 +48,12 @@ final class MessageTimeline {
 
     var isAtLatest: Bool { !hasMoreAfter }
 
+    /// Only current-session message text may shortcut an Inbox preview read.
+    func cachedPreviewMessage(_ id: Snowflake) -> Message? {
+        guard !isSeeded, !needsRefresh else { return nil }
+        return messages.last { $0.id == id }
+    }
+
     func observe(_ listener: @escaping (TimelineChange) -> Void) -> UUID {
         let id = UUID()
         listeners[id] = listener

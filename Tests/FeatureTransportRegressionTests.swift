@@ -59,6 +59,61 @@ nonisolated private final class RepairWire: URLProtocol, @unchecked Sendable {
 
 @MainActor
 final class FeatureTransportRegressionTests: XCTestCase {
+    func testServerDefaultSkipsUnresolvedThreadRows() async throws {
+        let mock = MockDiscord(), rest = api([]), model = AppModel(notificationAPI: rest)
+        var ready = mock.readyPayload()
+        let guild = ready.guilds[0].id
+        ready.guilds[0].threads.append(Channel(id: 700, type: .publicThread, guildID: guild, name: "Orphan PR", parentID: 999999, lastMessageID: 900))
+        model.store.apply(ready: ready)
+        model.fold.isCompact = false
+        let expected = try XCTUnwrap(model.store.sections(for: guild).flatMap(\.channels).first {
+            !$0.type.isThread && (($0.type.isTextLike && !$0.type.isVoice) || $0.type.isForumLike)
+        })
+        model.select(guild: guild)
+        XCTAssertEqual(model.selectedChannel, expected.id)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(RepairWire.captured().isEmpty, "selecting a server must not request an orphan's parent")
+    }
+
+    func testUnresolvedParentLookupRejectsDeniedHistoryAndStaleNavigation() async throws {
+        for stale in [false, true] {
+            let mock = MockDiscord(), parentID = MockDiscord.generalChannel
+            var ready = mock.readyPayload()
+            let guild = ready.guilds[0].id
+            var parent = try XCTUnwrap(ready.guilds[0].channels.first { $0.id == parentID })
+            if !stale {
+                parent.permissionOverwrites = [PermissionOverwrite(id: guild, type: 0, allow: "0", deny: String(Permission.viewChannel))]
+            }
+            let body = String(decoding: try JSONEncoder().encode(parent), as: UTF8.self)
+            let rest = api([.init(body: body, held: true)])
+            let model = AppModel(notificationAPI: rest)
+            let thread = Channel(id: 700, type: .publicThread, guildID: guild, name: "Unresolved PR", parentID: parentID, lastMessageID: 900)
+            ready.guilds[0].channels.removeAll { $0.id == parentID }
+            ready.guilds[0].threads = [thread]
+            ready.readStates = [ReadState(id: thread.id, lastMessageID: 800, mentionCount: 7)]
+            model.store.apply(ready: ready)
+            let task = model.resolveParentAndSelect(thread, intent: model.navigationIntent)
+            try await waitForRequests(1)
+            if stale { model.select(channel: nil) }
+            RepairWire.release()
+            await task.value
+            XCTAssertNil(model.selectedChannel)
+            XCTAssertNil(InboxPreviews.Key.current(thread.id, store: model.store, api: ObjectIdentifier(rest)))
+            let requests = RepairWire.captured()
+            XCTAssertEqual(requests.count, 1, "no history request is authorized by unresolved parent metadata")
+            XCTAssertEqual(requests.first?.request.httpMethod, "GET")
+            XCTAssertEqual(requests.first?.request.url?.path, "/api/v9/channels/\(parentID)")
+            if stale {
+                XCTAssertNil(model.store.channel(parentID), "a navigation change fences parent publication too")
+                XCTAssertEqual(model.store.badge(for: guild).mentions, 7)
+            } else {
+                XCTAssertFalse(model.store.canView(thread))
+                XCTAssertEqual(model.store.badge(for: guild).mentions, 0, "confirmed denial retires the unresolved activity")
+                XCTAssertFalse(InboxLists.unreadChannels(store: model.store).contains { $0.id == thread.id })
+            }
+        }
+    }
+
     private func message(_ id: UInt64, nonce: String? = nil) -> Message {
         var value = Message(id: Snowflake(id), channelID: 1, guildID: nil,
                             author: User(id: 5, username: "offline"), content: "fixture \(id)", timestamp: "")

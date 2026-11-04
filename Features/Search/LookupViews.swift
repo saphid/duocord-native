@@ -299,6 +299,7 @@ struct InboxView: View {
         OtherListIdentity.current(model: model, store: store, route: .inbox, presentation: presentationID, sidebar: closePanel != nil)
     }
     @State private var tab = 0
+    @State private var previews = InboxPreviews()
 
     var body: some View {
         NavigationStack {
@@ -330,24 +331,9 @@ struct InboxView: View {
                 } else {
                     let unread = unreadChannels
                     if unread.isEmpty { ContentUnavailableView("All Caught Up", systemImage: "checkmark.circle") }
+                    // Previews load per visible row, never for the whole list at once.
                     ForEach(unread) { channel in
-                        Button {
-                            model.open(channel: channel.id, message: nil)
-                        } label: {
-                            HStack {
-                                Image(systemName: ChannelRow.symbol(for: channel)).foregroundStyle(Color.textMuted).frame(width: 22)
-                                VStack(alignment: .leading) {
-                                    Text(store.channelName(channel)).font(.subheadline.weight(.semibold))
-                                    if let guild = channel.guildID.flatMap({ store.guilds[$0] }) {
-                                        Text(guild.name).font(.caption).foregroundStyle(Color.textMuted)
-                                    }
-                                }
-                                Spacer()
-                                if store.mentionCount(channel.id) > 0 { MentionBadge(count: store.mentionCount(channel.id)) }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                        InboxUnreadRow(channel: channel, previews: previews)
                     }
                 }
             }
@@ -366,7 +352,7 @@ struct InboxView: View {
             .task(id: submission) { await load(submission) }
             .refreshable { await load(submission) }
         }
-        .onDisappear { lookup.invalidate(); presentationID = UUID() }
+        .onDisappear { lookup.invalidate(); previews.invalidate(); presentationID = UUID() }
     }
 
     private func load(_ submission: OtherListIdentity?) async {

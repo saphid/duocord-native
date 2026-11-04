@@ -332,6 +332,13 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
 
     // MARK: DiscordAPI
 
+    func channel(_ id: Snowflake) async throws -> Channel {
+        guard let channel = (guilds.flatMap { $0.channels + $0.threads } + dms).first(where: { $0.id == id }) else {
+            throw DiscordError.http(404, "Unknown channel")
+        }
+        return channel
+    }
+
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message] {
         #if DEBUG
         let fail = lock.withLock { let value = readHistoryFailure; readHistoryFailure = false; return value }
