@@ -63,6 +63,27 @@ final class LookupPagingBoundaryTests: XCTestCase {
         await request.value
         XCTAssertEqual(owner.snapshot(for: a).status, .idle, change); XCTAssertNil(store.users[901], change)
     }
+    /// iPad audit: opening a result from the Search panel changes the
+    /// conversation, which fences the old pages; the same request runs again.
+    func testSearchRepeatsTheSameRequestAfterOpeningAResult() {
+        let model = AppModel(), store = DiscordStore(); model.selectedGuild = 10; model.selectedChannel = 1
+        let presentation = UUID()
+        let ran = searchIdentity(model, store, presentation: presentation, sidebar: true)
+        XCTAssertFalse(ran.repeatsRequest(of: nil))
+        XCTAssertFalse(ran.repeatsRequest(of: ran), "an unchanged identity keeps its results")
+        model.selectedChannel = 2 // the jump to a result in another channel
+        let jumped = searchIdentity(model, store, presentation: presentation, sidebar: true)
+        XCTAssertNotEqual(jumped, ran, "navigation still fences the earlier pages")
+        XCTAssertTrue(jumped.repeatsRequest(of: ran))
+        // Anything the person changed is a new request that waits for Search.
+        XCTAssertFalse(searchIdentity(model, store, query: "other", presentation: presentation, sidebar: true).repeatsRequest(of: ran), "query")
+        XCTAssertFalse(searchIdentity(model, store, scoped: true, presentation: presentation, sidebar: true).repeatsRequest(of: ran), "scope")
+        XCTAssertFalse(searchIdentity(model, store, presentation: UUID(), sidebar: true).repeatsRequest(of: ran), "reopened")
+        XCTAssertFalse(searchIdentity(model, store, presentation: presentation, sidebar: false).repeatsRequest(of: ran), "sheet")
+        store.reset()
+        XCTAssertFalse(searchIdentity(model, store, presentation: presentation, sidebar: true).repeatsRequest(of: ran), "session")
+    }
+
     func testSearchTypedLiveAppendSuccessBoundaries() async {
         for c in ["query","scope","channel","guild","session","account","presentation","close","reopen","route"] { await searchBoundary(c, failure: false) }
     }

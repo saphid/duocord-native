@@ -53,6 +53,21 @@ final class AdaptivePresentationTests: XCTestCase {
         completion()
     }
 
+    /// iPad audit: Members replaces the channel list in the sidebar, so a
+    /// rail tap (Home or a server) shows that destination's list instead.
+    func testRailNavigationShowsTheDestinationListInsteadOfMembers() {
+        for destination in [nil, Snowflake(20)] as [Snowflake?] {
+            let model = fixture()
+            model.toggleMembers()
+            XCTAssertTrue(model.membersVisible)
+            model.openFromRail(guild: destination)
+            XCTAssertFalse(model.membersVisible, "\(String(describing: destination))")
+            XCTAssertEqual(model.selectedGuild, destination)
+            model.toggleMembers()
+            XCTAssertTrue(model.membersVisible, "Members opens again from the toolbar")
+        }
+    }
+
     func testEveryRouteRegularToCompactAndBack() {
         for route in routes {
             let model = fixture()

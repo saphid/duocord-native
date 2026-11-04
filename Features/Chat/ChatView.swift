@@ -70,7 +70,8 @@ struct ChatView: View {
     private var toolbar: some ToolbarContent {
         // Symbol-only, titled items: the system moves them into the
         // vertical side bar on iPhone Duo; text-only items stay horizontal.
-        if !fold.isCompact, !model.isTableTop, !model.keyboardVisible, model.columnVisibility != .detailOnly {
+        // The keyboard shortens only a vertical side bar; a horizontal bar keeps the control.
+        if !fold.isCompact, !model.isTableTop, verticalBar == nil || !model.keyboardVisible, model.columnVisibility != .detailOnly {
             // The system shows its own reveal control while the sidebar is hidden.
             ToolbarItem(placement: .topBarLeading) {
                 Button("Hide Sidebar", systemImage: "sidebar.leading") {
@@ -83,7 +84,7 @@ struct ChatView: View {
                 // A horizontal bar (inner portrait), or a side bar shortened by
                 // the keyboard: secondary items fold into More so Search,
                 // Members and Inbox (with its badge) always stay visible.
-                if fold.isCompact && model.keyboardVisible {
+                if shortSideBar {
                     // The outer display's side bar is shortest with the keyboard
                     // up: Back, More and Inbox only.
                     Menu("More", systemImage: "ellipsis") {
@@ -99,7 +100,7 @@ struct ChatView: View {
                         }
                         Button("Pinned Messages", systemImage: "pin") { model.present(.pins) }
                     }
-                } else if (verticalBar == nil && !fold.isCompact) || model.keyboardVisible {
+                } else if horizontalBar || model.keyboardVisible {
                     Menu("More", systemImage: "ellipsis") {
                         ChannelReadButton(channel: channel.id)
                         ThreadsReadButton(parent: channel)
@@ -123,11 +124,11 @@ struct ChatView: View {
                     Button("Pinned Messages", systemImage: panelOpen(.pins) ? "pin.fill" : "pin") { model.present(.pins) }
                 }
                 // Open pages use their filled glyph (search has none; its panel shows it).
-                if !(fold.isCompact && model.keyboardVisible) {
+                if !shortSideBar {
                 Button("Search", systemImage: panelOpen(.search) ? "magnifyingglass" : "magnifyingglass") { model.present(.search) }
                     .keyboardShortcut("f")
                 }
-                if channel.guildID != nil, !(fold.isCompact && model.keyboardVisible) {
+                if channel.guildID != nil, !shortSideBar {
                     Button(model.membersVisible ? "Hide Members" : "Show Members",
                            systemImage: model.membersVisible ? "person.2.fill" : "person.2") {
                         withAnimation(.snappy(duration: 0.25)) { model.toggleMembers() }
@@ -140,6 +141,16 @@ struct ChatView: View {
             }
         }
     }
+
+    /// The bar runs across the top: inner portrait, and any iPad window (a
+    /// narrow iPad window is compact but has no vertical side bar, so the
+    /// side bar's layout would push Search, Members and Inbox into overflow).
+    private var horizontalBar: Bool {
+        verticalBar == nil && (!fold.isCompact || UIDevice.current.userInterfaceIdiom == .pad)
+    }
+
+    /// The outer display's side bar with the keyboard up: room for the least.
+    private var shortSideBar: Bool { fold.isCompact && model.keyboardVisible && !horizontalBar }
 
     private var threadParent: Snowflake { channel.type.isThread ? channel.parentID ?? channel.id : channel.id }
     private var threadsOpen: Bool { if case .threads? = model.sidebarPanel { true } else { false } }
@@ -583,7 +594,8 @@ struct Composer: View {
                     ComposerTextInput(draft: draft, model: model, channelID: channel.id,
                                       wantsFocus: model.composerContinuity.focusedChannel == channel.id,
                                       maximumLines: tableTopTyping ? 1 : 6, placeholder: placeholder,
-                                      hasSuggestions: query != nil && !suggestions.isEmpty, handleKey: handleKey)
+                                      hasSuggestions: query != nil && !suggestions.isEmpty, handleKey: handleKey,
+                                      send: { if canSend { model.send(in: channel.id) } })
                         .overlay(alignment: .topLeading) {
                             if draft.wrappedValue.text.isEmpty {
                                 Text(placeholder).foregroundStyle(Color.textMuted).allowsHitTesting(false).accessibilityHidden(true)
@@ -1210,6 +1222,8 @@ struct ComposerTextInput: UIViewRepresentable {
     var placeholder = "Message"
     var hasSuggestions: Bool
     var handleKey: (KeyEquivalent) -> KeyPress.Result
+    /// Command-Return on a hardware keyboard (Return and Shift-Return stay new lines).
+    var send: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1240,6 +1254,7 @@ struct ComposerTextInput: UIViewRepresentable {
         view.textColor = Theme.textPrimary
         view.accessibilityLabel = placeholder
         view.commandHandler = handleKey
+        view.sendHandler = send
         view.commandsEnabled = hasSuggestions
         // An edit changes text only (the attachment button is disabled too).
         view.acceptsImages = draft.editing == nil
@@ -1263,6 +1278,7 @@ struct ComposerTextInput: UIViewRepresentable {
         view.attachmentChanged = nil
         view.pastedImages = nil
         view.commandHandler = nil
+        view.sendHandler = nil
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: Input, context: Context) -> CGSize? {
@@ -1410,14 +1426,19 @@ struct ComposerTextInput: UIViewRepresentable {
             }
         }
         var commandHandler: ((KeyEquivalent) -> KeyPress.Result)?
+        var sendHandler: (() -> Void)?
         override var keyCommands: [UIKeyCommand]? {
-            guard commandsEnabled else { return super.keyCommands }
+            // An unconfirmed IME composition keeps the key; it isn't text to send yet.
+            let send = markedTextRange == nil ? [UIKeyCommand(title: "Send", action: #selector(sendMessage), input: "\r", modifierFlags: .command)] : []
+            send.forEach { $0.wantsPriorityOverSystemBehavior = true }
+            guard commandsEnabled else { return (super.keyCommands ?? []) + send }
             return [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, "\r", "\t", UIKeyCommand.inputEscape].map {
                 let command = UIKeyCommand(input: $0, modifierFlags: [], action: #selector(chooseSuggestion))
                 command.wantsPriorityOverSystemBehavior = true
                 return command
-            }
+            } + send
         }
+        @objc private func sendMessage(_ command: UIKeyCommand) { sendHandler?() }
         @objc private func chooseSuggestion(_ command: UIKeyCommand) {
             let key: KeyEquivalent
             switch command.input {

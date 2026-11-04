@@ -80,6 +80,8 @@ struct SearchView: View {
     @State private var thisChannelOnly = false
     @State private var lookup = LookupPagingState<SearchPageIdentity, Message>()
     @State private var presentationID = UUID()
+    /// The last request run, so a jump from the results can run it again.
+    @State private var lastRun: SearchPageIdentity?
 
     private var pagingIdentity: SearchPageIdentity? {
         submission.map { SearchPageIdentity(submission: $0, presentation: presentationID, sidebar: closePanel != nil, navigation: model.navigationIntent) }
@@ -187,7 +189,10 @@ struct SearchView: View {
             .toolbarVisibility(.visible, for: .navigationBar)
             .modifier(SheetSearchField(enabled: closePanel == nil, query: searchQuery, prompt: "Search \(selectedScopeName)"))
             .onSubmit(of: .search) { run() }
-            .onChange(of: pagingIdentity) { lookup.invalidate(unless: pagingIdentity) }
+            .onChange(of: pagingIdentity) {
+                lookup.invalidate(unless: pagingIdentity)
+                if pagingIdentity?.repeatsRequest(of: lastRun) == true { run() }
+            }
             .task {
                 #if DEBUG
                 if let preset = UserDefaults.standard.string(forKey: "DuocordSearchQuery"), query.isEmpty {
@@ -210,6 +215,7 @@ struct SearchView: View {
 
     private func run() {
         guard let identity = pagingIdentity else { lookup.invalidate(); return }
+        lastRun = identity
         let submission = identity.submission
         let api = model.api
         let targetStore = store
