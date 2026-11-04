@@ -507,9 +507,11 @@ nonisolated struct Message: Codable, Hashable, Sendable, Identifiable {
     var messageSnapshots: [MessageSnapshot] = []
     var poll: MessagePoll?
     var components: [MessageComponent] = []
+    /// The thread started from this message (Discord sends it with HAS_THREAD).
+    var thread: Channel?
 
     enum CodingKeys: String, CodingKey {
-        case id, author, member, content, timestamp, mentions, attachments, embeds, reactions, type, flags, pinned, nonce, poll, components
+        case id, author, member, content, timestamp, mentions, attachments, embeds, reactions, type, flags, pinned, nonce, poll, components, thread
         case channelID = "channel_id"
         case guildID = "guild_id"
         case editedTimestamp = "edited_timestamp"
@@ -542,6 +544,7 @@ nonisolated struct Message: Codable, Hashable, Sendable, Identifiable {
         if let d = try? c.superDecoder(forKey: .messageSnapshots) { messageSnapshots = MessageSnapshot.decodeList(from: d) }
         poll = try? c.decode(MessagePoll.self, forKey: .poll)
         if let d = try? c.superDecoder(forKey: .components) { components = MessageComponent.decodeList(from: d) }
+        thread = try? c.decodeIfPresent(Channel.self, forKey: .thread)
         type = try c.decodeIfPresent(Int.self, forKey: .type) ?? 0
         flags = try c.decodeIfPresent(Int.self, forKey: .flags) ?? 0
         stickerItems = (try? c.decodeIfPresent([StickerItem].self, forKey: .stickerItems)) ?? []

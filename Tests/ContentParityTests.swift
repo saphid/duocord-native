@@ -440,3 +440,165 @@ final class ContentParityTests: XCTestCase {
     }
 }
 
+
+/// A thread made in a channel leaves a link in that channel: Discord's
+/// "started a thread" line (type 18) and the starter message of a thread made
+/// from a message (HAS_THREAD) both open the thread.
+@MainActor
+final class ThreadLinkTests: XCTestCase {
+    private let guild: Snowflake = 910_000_000_000_000_000
+    private let chat = MockDiscord.generalChannel
+    private let author = User(id: 900_000_000_000_000_100, username: "aurora", globalName: "Aurora", discriminator: nil, avatar: nil, bot: nil)
+
+    private func fixture() -> AppModel {
+        let mock = MockDiscord()
+        let model = AppModel(peopleAPI: mock)
+        model.store.apply(ready: mock.readyPayload())
+        model.select(channel: chat)
+        return model
+    }
+
+    private func dispatch(_ model: AppModel, _ name: String, _ json: String) async {
+        await model.handle(GatewayDispatch(name: name, data: Data(("{\"d\":" + json + "}").utf8)))
+    }
+
+    private func render(_ message: Message, store: DiscordStore) -> RenderedMessage {
+        let builder = MessageBuilder(store: store, guildID: guild)
+        return builder.render(message, previous: nil, context: builder.context(), sendState: nil)
+    }
+
+    /// Every run of rendered text that opens a channel, as (text, channel).
+    private func channelLinks(_ rendered: RenderedMessage) -> [(String, Snowflake)] {
+        var texts: [NSAttributedString] = []
+        for case .text(let text) in rendered.segments { texts.append(text) }
+        var links: [(String, Snowflake)] = []
+        for text in texts {
+            text.enumerateAttribute(.dcChannel, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                guard let id = (value as? String).flatMap(Snowflake.init) else { return }
+                links.append(((text.string as NSString).substring(with: range), id))
+            }
+        }
+        return links
+    }
+
+    func testThreadCreatedLineFromGatewayLinksToTheNewThread() async throws {
+        let model = fixture()
+        let timeline = model.timeline(for: chat)
+        let thread: Snowflake = 910_000_000_000_000_777
+        await dispatch(model, "THREAD_CREATE", """
+            {"id":"\(thread)","type":11,"guild_id":"\(guild)","parent_id":"\(chat)","name":"Hinge notes","newly_created":true}
+            """)
+        await dispatch(model, "MESSAGE_CREATE", """
+            {"id":"1434105987072999001","channel_id":"\(chat)","guild_id":"\(guild)","type":18,"content":"Hinge notes",
+             "author":{"id":"\(author.id)","username":"aurora"},"timestamp":"2026-11-04T00:00:00Z",
+             "message_reference":{"channel_id":"\(thread)","guild_id":"\(guild)"}}
+            """)
+        let line = try XCTUnwrap(timeline.messages.first { $0.type == 18 })
+        let rendered = render(line, store: model.store)
+        XCTAssertEqual(rendered.body?.string, "aurora started a thread: Hinge notes")
+        let links = channelLinks(rendered)
+        XCTAssertEqual(links.map(\.0), ["Hinge notes"])
+        XCTAssertEqual(links.map(\.1), [thread])
+        XCTAssertTrue(rendered.accessibilityText.contains("Hinge notes"))
+    }
+
+    func testThreadCreatedLinePrefersTheThreadsCurrentName() throws {
+        let model = fixture()
+        let thread = try XCTUnwrap(model.store.channel(910_000_000_000_000_500), "mock thread under #general")
+        var line = Message(id: 1_434_105_987_072_999_002, channelID: chat, guildID: guild, author: author,
+                           content: "Old name", timestamp: "2026-11-04T00:00:00Z", type: 18)
+        line.messageReference = MessageReference(channelID: thread.id, guildID: guild)
+        let links = channelLinks(render(line, store: model.store))
+        XCTAssertEqual(links.map(\.0), ["Book pose feedback"])
+        XCTAssertEqual(links.map(\.1), [thread.id])
+    }
+
+    func testStarterMessageWithThreadPayloadLinksToItsThread() throws {
+        let model = fixture()
+        let json = """
+            {"id":"1434105987072999003","channel_id":"\(chat)","guild_id":"\(guild)","type":0,"flags":32,
+             "content":"Should the composer move below the fold?","author":{"id":"\(author.id)","username":"aurora"},
+             "timestamp":"2026-11-04T00:00:00Z",
+             "thread":{"id":"1434105987072999003","type":11,"guild_id":"\(guild)","parent_id":"\(chat)","name":"Composer placement","message_count":3}}
+            """
+        let starter = try JSONDecoder().decode(Message.self, from: Data(json.utf8))
+        XCTAssertEqual(starter.thread?.name, "Composer placement")
+        let roundTrip = try JSONDecoder().decode(Message.self, from: JSONEncoder().encode(starter))
+        XCTAssertEqual(roundTrip.thread?.id, starter.id, "snapshot cache keeps the thread")
+        let rendered = render(starter, store: model.store)
+        XCTAssertEqual(rendered.body?.string.hasPrefix("Should the composer move below the fold?"), true)
+        let links = channelLinks(rendered)
+        XCTAssertEqual(links.map(\.1), [starter.id])
+        XCTAssertTrue(links.first?.0.contains("Composer placement") == true)
+        XCTAssertTrue(rendered.accessibilityText.contains("Composer placement"))
+    }
+
+    func testHasThreadUpdateAddsLinkFromTheStoresThread() async throws {
+        let model = fixture()
+        let timeline = model.timeline(for: chat)
+        let id: Snowflake = 1_434_105_987_072_999_004
+        await dispatch(model, "MESSAGE_CREATE", """
+            {"id":"\(id)","channel_id":"\(chat)","guild_id":"\(guild)","type":0,"content":"Fold glitch report",
+             "author":{"id":"\(author.id)","username":"aurora"},"timestamp":"2026-11-04T00:00:00Z"}
+            """)
+        let before = try XCTUnwrap(timeline.messages.first { $0.id == id })
+        let builder = MessageBuilder(store: model.store, guildID: guild)
+        XCTAssertTrue(channelLinks(render(before, store: model.store)).isEmpty)
+        let staleSource = MessageBuilder.sourceHash(before, inputs: builder.inputs(for: before))
+        // Discord's order for a thread made from a message: THREAD_CREATE, then
+        // MESSAGE_UPDATE setting HAS_THREAD on the starter (no thread object).
+        await dispatch(model, "THREAD_CREATE", """
+            {"id":"\(id)","type":11,"guild_id":"\(guild)","parent_id":"\(chat)","name":"Fold glitch","newly_created":true}
+            """)
+        await dispatch(model, "MESSAGE_UPDATE", """
+            {"id":"\(id)","channel_id":"\(chat)","guild_id":"\(guild)","flags":32}
+            """)
+        let after = try XCTUnwrap(timeline.messages.first { $0.id == id })
+        XCTAssertNotEqual(MessageBuilder.sourceHash(after, inputs: builder.inputs(for: after)), staleSource, "cached row re-renders")
+        let links = channelLinks(render(after, store: model.store))
+        XCTAssertEqual(links.map(\.1), [id])
+        XCTAssertTrue(links.first?.0.contains("Fold glitch") == true)
+    }
+
+    func testThreadLinkOpensTheThread() throws {
+        let model = fixture()
+        let coordinator = ListCoordinator()
+        coordinator.model = model
+        let controller = MessageListController(timeline: model.timeline(for: chat), store: model.store, api: model.api, guildID: guild,
+                                               title: "general", subtitle: "", icon: "number", anchor: nil, unreadAfter: nil)
+        controller.host = coordinator
+        controller.messageCell(MessageCell(frame: .zero), tap: .channel(910_000_000_000_000_500))
+        XCTAssertEqual(model.selectedChannel, 910_000_000_000_000_500)
+
+        // VoiceOver reaches the same link as a cell action.
+        model.select(channel: chat)
+        var line = Message(id: 1_434_105_987_072_999_007, channelID: chat, guildID: guild, author: author,
+                           content: "Book pose feedback", timestamp: "2026-11-04T00:00:00Z", type: 18)
+        line.messageReference = MessageReference(channelID: 910_000_000_000_000_500, guildID: guild)
+        let rendered = render(line, store: model.store)
+        let cell = MessageCell(frame: .zero)
+        cell.delegate = controller
+        cell.configure(rendered, layout: MessageLayoutEngine.layout(rendered, width: 400), width: 400)
+        let action = try XCTUnwrap(cell.accessibilityCustomActions?.first { $0.name == "Open thread Book pose feedback" })
+        XCTAssertEqual(model.selectedChannel, chat)
+        XCTAssertTrue(action.actionHandler?(action) == true)
+        XCTAssertEqual(model.selectedChannel, 910_000_000_000_000_500)
+    }
+
+    func testOrdinaryMessagesAndUnlinkedSystemLinesStayUnlinked() throws {
+        let model = fixture()
+        let plain = Message(id: 1_434_105_987_072_999_005, channelID: chat, guildID: guild, author: author,
+                            content: "No thread here", timestamp: "2026-11-04T00:00:00Z")
+        XCTAssertTrue(channelLinks(render(plain, store: model.store)).isEmpty)
+        let orphan = Message(id: 1_434_105_987_072_999_006, channelID: chat, guildID: guild, author: author,
+                             content: "Lost thread", timestamp: "2026-11-04T00:00:00Z", type: 18)
+        let rendered = render(orphan, store: model.store)
+        XCTAssertEqual(rendered.body?.string, "Aurora started a thread: Lost thread")
+        XCTAssertTrue(channelLinks(rendered).isEmpty)
+        // A starter shown inside its own thread (forum posts) does not link to itself.
+        var inside = plain
+        inside.channelID = plain.id
+        inside.flags = 32
+        XCTAssertTrue(channelLinks(render(inside, store: model.store)).isEmpty)
+    }
+}

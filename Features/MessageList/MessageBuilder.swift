@@ -17,6 +17,7 @@ struct MessageBuilder {
         var forwardChannelName: String? = nil
         var hidesBlocked = false
         var hidesReply = false
+        var thread: ThreadLink? = nil
     }
 
     func inputs(for message: Message) -> Inputs {
@@ -29,7 +30,31 @@ struct MessageBuilder {
             replyName: ref.map { store.displayName(for: $0.author, in: guild) },
             replyColor: ref.map { store.roleColor(for: $0.author.id, in: guild).map(UIColor.role) ?? Theme.textSecondary },
             forwardChannelName: message.messageReference?.channelID.flatMap { store.channels[$0]?.name },
-            hidesBlocked: store.hidesBlockedMessage(message), hidesReply: ref.map { store.hidesBlockedMessage($0) } ?? false)
+            hidesBlocked: store.hidesBlockedMessage(message), hidesReply: ref.map { store.hidesBlockedMessage($0) } ?? false,
+            thread: threadLink(for: message))
+    }
+
+    /// The thread a message links to, named as the store has it now. A
+    /// "started a thread" line (type 18) names its thread in the message
+    /// reference; a thread made from a message shares that message's id
+    /// (HAS_THREAD, flag 32), and Discord may also send the thread itself.
+    func threadLink(for message: Message) -> ThreadLink? {
+        let id: Snowflake
+        var fallback: String?
+        if message.type == 18 {
+            guard let thread = message.messageReference?.channelID else { return nil }
+            id = thread
+            fallback = message.content
+        } else if message.thread != nil || message.flags & 32 != 0 {
+            id = message.thread?.id ?? message.id
+            fallback = message.thread?.name
+        } else {
+            return nil
+        }
+        // A forum post's starter lives inside its own thread: no self-link.
+        guard id != message.channelID else { return nil }
+        let name = [store.channel(id)?.name, fallback].compactMap { $0 }.first { !$0.isEmpty } ?? "Thread"
+        return ThreadLink(id: id, name: name)
     }
 
     nonisolated(unsafe) private static let timeFormatter: DateFormatter = {
@@ -107,7 +132,12 @@ struct MessageBuilder {
             let (icon, text) = systemLine(message, name: name)
             systemIcon = icon
             let line = NSMutableAttributedString(string: "", attributes: [:])
-            line.append(NSAttributedString(string: text, attributes: [.font: Theme.font(15), .foregroundColor: Theme.textSecondary]))
+            if message.type == 18, let thread = inputs.thread {
+                line.append(NSAttributedString(string: "\(name) started a thread: ", attributes: [.font: Theme.font(15), .foregroundColor: Theme.textSecondary]))
+                line.append(threadLinkText(thread, font: Theme.font(15, .semibold)))
+            } else {
+                line.append(NSAttributedString(string: text, attributes: [.font: Theme.font(15), .foregroundColor: Theme.textSecondary]))
+            }
             body = line
             segments = [.text(line)]
         } else if !message.content.isEmpty {
@@ -139,6 +169,16 @@ struct MessageBuilder {
                     whole.append(text)
                 }
             }
+            body = whole
+        }
+        // A thread made from this message: a link under it, as Discord shows.
+        if !message.isSystem, let thread = inputs.thread {
+            let line = NSMutableAttributedString(string: "Thread · ", attributes: [.font: Theme.font(14), .foregroundColor: Theme.textMuted])
+            line.append(threadLinkText(thread, font: Theme.font(14, .semibold), suffix: " ›"))
+            segments.append(.text(line))
+            let whole = NSMutableAttributedString(attributedString: body ?? NSAttributedString())
+            if whole.length > 0 { whole.append(NSAttributedString(string: "\n")) }
+            whole.append(line)
             body = whole
         }
 
@@ -205,6 +245,7 @@ struct MessageBuilder {
         hasher.combine(inputs.forwardChannelName)
         hasher.combine(inputs.hidesBlocked)
         hasher.combine(inputs.hidesReply)
+        hasher.combine(inputs.thread)
 
         var spoken = continuation ? "" : "\(name), \(stamp). "
         if let reply { spoken += "Replying to \(reply.name): \(reply.snippet). " }
@@ -220,7 +261,14 @@ struct MessageBuilder {
             timestamp: stamp, shortTime: time, reply: reply, body: body, segments: segments, systemIcon: systemIcon, media: media, files: files,
             embeds: embeds, reactions: reactions, showsAddReaction: !reactions.isEmpty && sendState == nil,
             isMentioned: mentioned, sendState: sendState,
-            accessibilityText: spoken, contentKey: hasher.finalize(), source: sourceHash(message, inputs: inputs))
+            accessibilityText: spoken, contentKey: hasher.finalize(), source: sourceHash(message, inputs: inputs), thread: inputs.thread)
+    }
+
+    /// The tappable thread name: opens the thread like a channel mention.
+    nonisolated private static func threadLinkText(_ thread: ThreadLink, font: UIFont, suffix: String = "") -> NSAttributedString {
+        NSAttributedString(string: thread.name + suffix, attributes: [
+            .font: font, .foregroundColor: Theme.link, .dcChannel: thread.id.description,
+        ])
     }
 
     /// Everything the render depends on: the message and the store lookups.
@@ -234,6 +282,7 @@ struct MessageBuilder {
         hasher.combine(inputs.forwardChannelName)
         hasher.combine(inputs.hidesBlocked)
         hasher.combine(inputs.hidesReply)
+        hasher.combine(inputs.thread)
         return hasher.finalize()
     }
 

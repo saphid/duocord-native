@@ -1122,6 +1122,13 @@ final class MessageCell: UICollectionViewCell {
         }
         // The cell is the VoiceOver element. Expose card links/media as
         // local actions rather than trapping them inside that element.
+        if let thread = message.thread {
+            actions.append(UIAccessibilityCustomAction(name: "Open thread \(thread.name)") { [weak self] _ in
+                guard let self else { return false }
+                self.delegate?.messageCell(self, tap: .channel(thread.id))
+                return true
+            })
+        }
         for embed in message.embeds {
             if let url = embed.titleURL {
                 actions.append(UIAccessibilityCustomAction(name: embed.title?.string ?? "Open link") { [weak self] _ in

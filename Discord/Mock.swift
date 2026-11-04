@@ -140,6 +140,22 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         return [raster, gifv, sticker, spoiler]
     }
 
+    /// A "started a thread" line and a thread's starter message, both linking
+    /// to the #general mock thread. Inserted just before the parity fixtures.
+    static func threadLinkFixtures() -> [Message] {
+        let author = User(id: 900_000_000_000_000_100, username: "aurora", globalName: "Aurora", avatar: "mock")
+        let thread = Snowflake(910_000_000_000_000_500)
+        var created = Message(id: 1_434_105_987_072_000_030, channelID: generalChannel, guildID: 910_000_000_000_000_000,
+                              author: author, content: "Book pose feedback", timestamp: "2026-11-01T00:00:00Z", type: 18)
+        created.messageReference = MessageReference(channelID: thread, guildID: 910_000_000_000_000_000)
+        var starter = Message(id: 1_434_105_987_072_000_031, channelID: generalChannel, guildID: 910_000_000_000_000_000,
+                              author: author, content: "Does the sidebar still end at the fold in book pose?", timestamp: "2026-11-01T00:00:00Z")
+        starter.flags = 32
+        starter.thread = Channel(id: thread, type: .publicThread, guildID: 910_000_000_000_000_000, name: "Book pose feedback",
+                                 parentID: generalChannel)
+        return [created, starter]
+    }
+
     static let contentParityJSON = #"""
     [
       {"id":"1434105987072000001","channel_id":"910000000000000102","author":{"id":"900000000000000100","username":"aurora"},
@@ -326,6 +342,15 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
             // of the history is unchanged.
             if dm == nil, !isImages, !message.content.isEmpty, message.mentions.isEmpty, index % 47 == 13 || index == count - 3 {
                 message.author = me
+            }
+            let threadFixtures = channel == Self.generalChannel ? Self.threadLinkFixtures() : []
+            if threadFixtures.indices.contains(index - (count - 14)) {
+                let generatedID = message.id
+                let generatedTimestamp = message.timestamp
+                message = threadFixtures[index - (count - 14)]
+                message.id = generatedID
+                message.timestamp = generatedTimestamp
+                message.guildID = guildID
             }
             let fixtureIndex = index - (count - 12)
             if primaryFixtures.indices.contains(fixtureIndex) {
