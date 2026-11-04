@@ -14,6 +14,19 @@ struct SearchPageIdentity: Equatable {
     let presentation: UUID
     let sidebar: Bool
     let navigation: UUID
+
+    /// Opening a result (or any other navigation) is a new identity, which
+    /// hides the results it fenced. With the same query, scope, account and
+    /// panel, it is the same request the person already made: run it again
+    /// rather than leave the open panel blank.
+    func repeatsRequest(of previous: SearchPageIdentity?) -> Bool {
+        guard let previous, self != previous else { return false }
+        guard presentation == previous.presentation, sidebar == previous.sidebar else { return false }
+        let now = submission, then = previous.submission
+        let sameAccount = now.context.session == then.context.session && now.context.account == then.context.account
+        let sameScope = now.guild == then.guild && now.channel == then.channel && now.scopeName == then.scopeName
+        return sameAccount && sameScope && now.query == then.query
+    }
 }
 
 struct ForumSubmission: Equatable {

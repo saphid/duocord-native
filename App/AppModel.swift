@@ -607,6 +607,14 @@ final class AppModel {
 
     var isHome: Bool { selectedGuild == nil }
 
+    /// A server rail tap (a server, or Home for direct messages) asks for
+    /// that destination's list. The Members page takes the list's place in
+    /// the sidebar, so it steps aside rather than hide the list.
+    func openFromRail(guild: Snowflake?) {
+        membersVisible = false
+        select(guild: guild)
+    }
+
     func select(guild: Snowflake?) {
         navigationIntent = UUID()
         selectedGuild = guild

@@ -214,7 +214,7 @@ struct HomeButton: View {
 
     var body: some View {
         RailIcon(selected: model.isHome, unread: false, mentions: 0, label: "Direct Messages") {
-            model.select(guild: nil)
+            model.openFromRail(guild: nil)
         } content: {
             ZStack {
                 (model.isHome ? Color.accentBlurple : Color.elevated)
@@ -250,7 +250,7 @@ struct GuildButton: View {
         if let guild = store.guilds[guildID] {
             let badge = store.badge(for: guildID)
             RailIcon(selected: model.selectedGuild == guildID, unread: badge.unread, mentions: badge.mentions, label: guild.name) {
-                model.select(guild: guildID)
+                model.openFromRail(guild: guildID)
             } content: {
                 GuildIcon(guild: guild, size: 48, selected: model.selectedGuild == guildID)
             }
