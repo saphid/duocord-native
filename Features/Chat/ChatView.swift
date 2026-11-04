@@ -594,7 +594,8 @@ struct Composer: View {
                     ComposerTextInput(draft: draft, model: model, channelID: channel.id,
                                       wantsFocus: model.composerContinuity.focusedChannel == channel.id,
                                       maximumLines: tableTopTyping ? 1 : 6, placeholder: placeholder,
-                                      hasSuggestions: query != nil && !suggestions.isEmpty, handleKey: handleKey)
+                                      hasSuggestions: query != nil && !suggestions.isEmpty, handleKey: handleKey,
+                                      send: { if canSend { model.send(in: channel.id) } })
                         .overlay(alignment: .topLeading) {
                             if draft.wrappedValue.text.isEmpty {
                                 Text(placeholder).foregroundStyle(Color.textMuted).allowsHitTesting(false).accessibilityHidden(true)
@@ -1221,6 +1222,8 @@ struct ComposerTextInput: UIViewRepresentable {
     var placeholder = "Message"
     var hasSuggestions: Bool
     var handleKey: (KeyEquivalent) -> KeyPress.Result
+    /// Command-Return on a hardware keyboard (Return and Shift-Return stay new lines).
+    var send: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1251,6 +1254,7 @@ struct ComposerTextInput: UIViewRepresentable {
         view.textColor = Theme.textPrimary
         view.accessibilityLabel = placeholder
         view.commandHandler = handleKey
+        view.sendHandler = send
         view.commandsEnabled = hasSuggestions
         // An edit changes text only (the attachment button is disabled too).
         view.acceptsImages = draft.editing == nil
@@ -1274,6 +1278,7 @@ struct ComposerTextInput: UIViewRepresentable {
         view.attachmentChanged = nil
         view.pastedImages = nil
         view.commandHandler = nil
+        view.sendHandler = nil
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: Input, context: Context) -> CGSize? {
@@ -1421,14 +1426,18 @@ struct ComposerTextInput: UIViewRepresentable {
             }
         }
         var commandHandler: ((KeyEquivalent) -> KeyPress.Result)?
+        var sendHandler: (() -> Void)?
         override var keyCommands: [UIKeyCommand]? {
-            guard commandsEnabled else { return super.keyCommands }
+            let send = UIKeyCommand(title: "Send", action: #selector(sendMessage), input: "\r", modifierFlags: .command)
+            send.wantsPriorityOverSystemBehavior = true
+            guard commandsEnabled else { return (super.keyCommands ?? []) + [send] }
             return [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, "\r", "\t", UIKeyCommand.inputEscape].map {
                 let command = UIKeyCommand(input: $0, modifierFlags: [], action: #selector(chooseSuggestion))
                 command.wantsPriorityOverSystemBehavior = true
                 return command
-            }
+            } + [send]
         }
+        @objc private func sendMessage(_ command: UIKeyCommand) { sendHandler?() }
         @objc private func chooseSuggestion(_ command: UIKeyCommand) {
             let key: KeyEquivalent
             switch command.input {

@@ -31,7 +31,7 @@ final class ComposerPasteTests: XCTestCase {
         }
     }
 
-    private func mount(_ draft: Draft) throws -> (AppModel, ComposerTextInput.Input) {
+    private func mount(_ draft: Draft, send: @escaping () -> Void = {}) throws -> (AppModel, ComposerTextInput.Input) {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let model = AppModel()
         model.selectedChannel = 11
@@ -39,7 +39,7 @@ final class ComposerPasteTests: XCTestCase {
         model.composerContinuity.requestFocus(in: 11)
         let binding = Binding(get: { model.drafts[11] ?? Draft() }, set: { model.drafts[11] = $0 })
         let field = ComposerTextInput(draft: binding, model: model, channelID: 11, wantsFocus: true,
-                                      maximumLines: 6, hasSuggestions: false, handleKey: { _ in .ignored })
+                                      maximumLines: 6, hasSuggestions: false, handleKey: { _ in .ignored }, send: send)
         let window = UIWindow(windowScene: scene)
         window.windowLevel = .normal + 1
         window.rootViewController = UIHostingController(rootView: field.frame(width: 300).padding(40))
@@ -70,6 +70,21 @@ final class ComposerPasteTests: XCTestCase {
         input.paste(nil)
         let deadline = Date.now.addingTimeInterval(2)
         while !done(), Date.now < deadline { RunLoop.main.run(until: Date.now.addingTimeInterval(0.05)) }
+    }
+
+    /// iPad hardware keyboard: Command-Return sends; Return and Shift-Return
+    /// are not intercepted, so they keep inserting new lines.
+    func testCommandReturnSendsAndPlainReturnStaysANewLine() throws {
+        var sends = 0
+        let (model, input) = try mount(Draft(text: "line one\nline two")) { sends += 1 }
+        let commands = input.keyCommands ?? []
+        let send = try XCTUnwrap(commands.first { $0.input == "\r" && $0.modifierFlags == .command }, "Command-Return is offered")
+        XCTAssertEqual(send.title, "Send", "listed in the hardware keyboard's shortcut overlay")
+        XCTAssertFalse(commands.contains { $0.input == "\r" && $0.modifierFlags.subtracting(.shift).isEmpty },
+                       "plain and Shift-Return reach the text view as new lines")
+        _ = input.perform(try XCTUnwrap(send.action), with: send)
+        XCTAssertEqual(sends, 1)
+        XCTAssertEqual(model.drafts[11]?.text, "line one\nline two", "the adapter only asks; ChatControls decides and sends")
     }
 
     func testPastingImageDataAddsAnAttachmentAndKeepsText() throws {

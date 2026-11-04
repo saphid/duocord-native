@@ -91,6 +91,41 @@ final class DuoLayoutTests: XCTestCase {
         elements(labelled: label, in: window).contains { $0.accessibilityFrame.minY >= 0 && $0.accessibilityFrame.maxY <= window.bounds.maxY }
     }
 
+    // MARK: Channel rows at larger text (iPad)
+
+    /// One size above the default (a tester's setting) and an accessibility
+    /// size: the real channel list (mock server) keeps a 44 pt touch pitch on
+    /// iPad, and a name keeps room above and below instead of filling its row.
+    func testChannelRowsKeepTouchTargetsAtLargerText() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "the 44 pt floor is the iPad's")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        for textSize in [UIContentSizeCategory.extraLarge, .accessibilityExtraLarge] {
+            let model = AppModel(notificationAPI: MockDiscord())
+            model.start()
+            XCTAssertTrue(spin { model.store.isReady })
+            let list = ChannelList(guildID: 910_000_000_000_000_000)
+                .environment(model).environment(model.store).environment(model.settings).environment(model.fold)
+            let controller = UIHostingController(rootView: list)
+            controller.traitOverrides.preferredContentSizeCategory = textSize
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = .normal + 1
+            window.rootViewController = controller
+            window.frame = CGRect(x: 0, y: 0, width: 268, height: 1200)
+            window.makeKeyAndVisible()
+            self.window = window
+            XCTAssertTrue(spin { self.views(UICollectionViewCell.self, in: window).count >= 8 }, "\(textSize)")
+            settle()
+            let heights = views(UICollectionViewCell.self, in: window).filter { !$0.isHidden }.map(\.bounds.height).sorted()
+            guard heights.count >= 8 else { XCTFail("\(textSize): only \(heights.count) rows"); continue }
+            XCTAssertGreaterThanOrEqual(heights.first ?? 0, 44, "\(textSize): row heights \(heights)")
+            let line = UIFont.preferredFont(forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: textSize)).lineHeight
+            // Most cells are channel rows (two are category headers).
+            XCTAssertGreaterThanOrEqual(heights[heights.count / 2], line + 8, "\(textSize): names fill their rows \(heights)")
+            window.isHidden = true
+            self.window = nil
+        }
+    }
+
     // MARK: Bottom inset with the keyboard hidden
 
     /// The home indicator needs 20 pt (the whole bottom inset UIKit gives a

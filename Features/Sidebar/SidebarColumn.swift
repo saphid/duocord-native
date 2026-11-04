@@ -398,7 +398,8 @@ struct ChannelList: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, 34)
+        // Touch rows on iPad get the 44 pt minimum target; the Duo keeps its denser list.
+        .environment(\.defaultMinListRowHeight, UIDevice.current.userInterfaceIdiom == .pad ? 44 : 34)
         .focusEffectDisabled()
         .focusable(false)
         .accessibilityIdentifier("channelList")
@@ -464,6 +465,9 @@ struct ChannelRow: View {
     @Environment(DiscordStore.self) private var store
     let channel: Channel
     var isThread = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// Breathing room that grows with the text, so larger text never fills the row edge to edge.
+    @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = 4
 
     /// What a row draws and speaks: only its own unread and mention state.
     /// As in Discord, a thread's activity stays on the thread's own row,
@@ -501,7 +505,8 @@ struct ChannelRow: View {
                 Text(channel.name ?? "")
                     .font(.system(.body, weight: unread || selected ? .semibold : .regular))
                     .foregroundStyle(unread || selected ? Color.textPrimary : (store.isMuted(channel) ? Color.textMuted.opacity(0.6) : Color.textSecondary))
-                    .lineLimit(1)
+                    // Larger text wraps a long name rather than cutting it short.
+                    .lineLimit(typeSize > .large ? 2 : 1)
                 if store.isUnresolvedThread(channel) {
                     Text("Parent channel unavailable").font(.caption).foregroundStyle(Color.textMuted)
                 }
@@ -518,6 +523,7 @@ struct ChannelRow: View {
             }
         }
         .padding(.leading, isThread ? 12 : 0)
+        .padding(.vertical, verticalPadding)
         .overlay(alignment: .leading) {
             if unread && !selected {
                 Capsule().fill(Color.textPrimary).frame(width: 4, height: 8).offset(x: -12)
