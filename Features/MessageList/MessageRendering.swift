@@ -83,6 +83,14 @@ nonisolated struct RenderedMessage: @unchecked Sendable {
     /// The source message's hash; a cached render is reused only while it matches.
     var source: Int = 0
     var hidesBlocked = false
+    /// The thread this message opens: a "started a thread" line or a thread's starter.
+    var thread: ThreadLink? = nil
+}
+
+/// A thread made in the channel, as its parent channel links to it.
+nonisolated struct ThreadLink: Hashable, Sendable {
+    var id: Snowflake
+    var name: String
 }
 
 /// Exact frames for a rendered message at one width.
