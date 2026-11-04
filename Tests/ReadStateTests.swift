@@ -802,6 +802,113 @@ final class ReadStateTests: XCTestCase {
         XCTAssertEqual(model.readSaves[chat], 0)
     }
 
+    // MARK: Mark Threads as Read
+
+    private let forum: Snowflake = 910_000_000_000_000_104
+    private let other: Snowflake = 910_000_000_000_000_101
+
+    /// #general with more threads than the sidebar prefix, an archived one,
+    /// private threads with and without access, a thread under another
+    /// channel and forum posts known only from the forum page.
+    private func threadFixture() -> (AppModel, MockDiscord, eligible: Set<Snowflake>, excluded: Set<Snowflake>) {
+        let (model, mock) = fixture()
+        func thread(_ n: UInt64, parent: Snowflake, type: ChannelType = .publicThread, archived: Bool = false) -> Channel {
+            var c = Channel(id: Snowflake(960_000_000_000_000_000 + n), type: type, guildID: guild, name: "t\(n)",
+                            parentID: parent, lastMessageID: Snowflake(300 + n))
+            c.threadMetadata = ThreadMetadata(archived: archived, locked: false)
+            return c
+        }
+        let active = (0..<(UInt64(DiscordStore.sidebarThreadLimit) + 3)).map { thread($0, parent: chat) }
+        let archived = thread(20, parent: chat, archived: true)
+        var owned = thread(21, parent: chat, type: .privateThread); owned.ownerID = model.store.me?.id
+        let inaccessible = thread(22, parent: chat, type: .privateThread)
+        let unrelated = thread(23, parent: other)
+        let posts = [thread(30, parent: forum), thread(31, parent: forum, archived: true)]
+        var ready = mock.readyPayload()
+        let index = ready.guilds.firstIndex { $0.id == guild }!
+        for c in ready.guilds[index].channels.indices where ready.guilds[index].channels[c].type.isTextLike || ready.guilds[index].channels[c].type.isForumLike {
+            ready.guilds[index].channels[c].lastMessageID = 300
+        }
+        for t in ready.guilds[index].threads.indices { ready.guilds[index].threads[t].lastMessageID = 300 }
+        ready.guilds[index].threads += active + [archived, owned, inaccessible, unrelated]
+        ready.readStates = (ready.guilds[index].channels + ready.guilds[index].threads + posts)
+            .filter { $0.type.isTextLike || $0.type.isForumLike }.map { ReadState(id: $0.id, lastMessageID: 10, mentionCount: 1) }
+        mock.setReadStates(ready.readStates)
+        model.store.apply(ready: ready)
+        model.store.remember(threads: posts)
+        let original = Set(mock.readyPayload().guilds[index].threads.filter { $0.parentID == chat }.map(\.id))
+        let eligible = Set((active + [archived, owned]).map(\.id)).union(original)
+        return (model, mock, eligible, Set([chat, inaccessible.id, unrelated.id, other, forum] + posts.map(\.id)))
+    }
+
+    func testMarkThreadsAsReadAcknowledgesOnlyEligibleChildThreadsInOneBulk() async throws {
+        let (model, mock, eligible, excluded) = threadFixture()
+        XCTAssertGreaterThan(model.store.sidebarThreads(in: chat).count, DiscordStore.sidebarThreadLimit)
+        await model.markThreadsAsRead(in: chat).value
+        XCTAssertEqual(mock.readOperations.count, 1)
+        let operation = try XCTUnwrap(mock.readOperations.first)
+        XCTAssertEqual(operation.route, "read-states/ack-bulk")
+        XCTAssertEqual(Set(operation.reads.map(\.channel)), eligible, "Beyond the sidebar prefix, archived and accessible private threads")
+        XCTAssertTrue(operation.reads.allSatisfy { !$0.manual && $0.message == model.store.channel($0.channel)?.lastMessageID })
+        for id in eligible {
+            XCTAssertEqual(model.store.readStates[id]?.lastMessageID, model.store.channel(id)?.lastMessageID)
+            XCTAssertEqual(model.store.mentionCount(id), 0)
+            XCTAssertEqual(model.readSaves[id], 0)
+        }
+        for id in excluded {
+            XCTAssertEqual(model.store.readStates[id]?.lastMessageID, 10, "Parent and unrelated channels stay unread")
+            XCTAssertNil(model.readSaves[id])
+        }
+        XCTAssertTrue(model.store.isUnread(model.store.channel(chat)!))
+    }
+
+    func testMarkThreadsAsReadCoversForumPostsKnownFromForumPage() async throws {
+        let (model, mock, _, _) = threadFixture()
+        let posts: Set<Snowflake> = [960_000_000_000_000_030, 960_000_000_000_000_031]
+        await model.markThreadsAsRead(in: forum).value
+        XCTAssertEqual(Set(try XCTUnwrap(mock.readOperations.first).reads.map(\.channel)), posts)
+        XCTAssertEqual(model.store.readStates[forum]?.lastMessageID, 10)
+        XCTAssertEqual(model.store.readStates[960_000_000_000_000_000]?.lastMessageID, 10)
+    }
+
+    func testMarkThreadsAsReadOnThreadOrThreadlessChannelSendsNothing() async {
+        let (model, mock, _, _) = threadFixture()
+        await model.markThreadsAsRead(in: 960_000_000_000_000_000).value
+        await model.markThreadsAsRead(in: 940_000_000_000_000_000).value
+        XCTAssertTrue(mock.readOperations.isEmpty)
+        XCTAssertTrue(model.readSaves.isEmpty)
+    }
+
+    func testMarkThreadsAsReadPendingCoversCapturedThreadsOnly() async {
+        let (model, mock, eligible, excluded) = threadFixture()
+        let gate = ReadGate()
+        mock.beforeReadResponse = { _ in await gate.pause() }
+        let save = model.markThreadsAsRead(in: chat)
+        for id in eligible { XCTAssertEqual(model.readSaves[id], 1) }
+        for id in excluded { XCTAssertNil(model.readSaves[id]) }
+        await gate.waitUntilPaused()
+        mock.beforeReadResponse = nil
+        await gate.resume(); await save.value
+        for id in eligible { XCTAssertEqual(model.readSaves[id], 0) }
+    }
+
+    func testMarkThreadsAsReadTransportFailureAppliesNoSuccess() async throws {
+        let (model, mock, eligible, _) = threadFixture()
+        mock.failNextRead = true
+        await model.markThreadsAsRead(in: chat).value
+        XCTAssertEqual(try XCTUnwrap(mock.readOperations.first).route, "read-states/ack-bulk")
+        for id in eligible {
+            XCTAssertEqual(model.store.readStates[id]?.lastMessageID, 10, "No local success after HTTP failure")
+            XCTAssertEqual(model.store.mentionCount(id), 1)
+            XCTAssertNotNil(model.readErrors[id])
+            XCTAssertEqual(model.readSaves[id], 0)
+        }
+        XCTAssertNil(model.readErrors[chat])
+        XCTAssertEqual(model.store.readStates[chat]?.lastMessageID, 10)
+        // Retry after failure succeeds through the same FIFO.
+        await model.markThreadsAsRead(in: chat).value
+        for id in eligible { XCTAssertNil(model.readErrors[id]); XCTAssertEqual(model.store.mentionCount(id), 0) }
+    }
 }
 
 private actor ReadGate {

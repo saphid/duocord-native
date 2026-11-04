@@ -485,6 +485,14 @@ final class DiscordStore {
         return (threadIndex(in: guild)[parent] ?? []).filter { $0.threadMetadata?.archived != true }
     }
 
+    /// Every known thread under a parent, archived ones and forum posts
+    /// included, whether or not the sidebar lists it. Callers check access.
+    func knownThreads(in parent: Snowflake) -> [Channel] {
+        _ = channels // observation dependency
+        guard let guild = channels[parent]?.guildID else { return [] }
+        return threadIndex(in: guild)[parent] ?? []
+    }
+
     private func threadIndex(in guild: Snowflake) -> [Snowflake: [Channel]] {
         if let cached = threadIndexCache[guild] { return cached }
         var byParent: [Snowflake: [Channel]] = [:]
