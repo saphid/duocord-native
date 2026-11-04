@@ -451,7 +451,7 @@ struct ThreadsView: View {
                     ForEach(active) { thread in threadRow(thread) }
                 }
                 let snapshot = lookup.snapshot(for: submission)
-                let archived = OtherListConsumers.archivedRows(snapshot.rows, active: active, store: store)
+                let archived = OtherListConsumers.archivedRows(snapshot.rows, active: active, store: store, parent: parentID)
                 Section("Archived") {
                     ForEach(archived) { thread in threadRow(thread) }
                     if case .failed(let error) = snapshot.status {
@@ -478,6 +478,7 @@ struct ThreadsView: View {
             .task(id: submission) { await load(submission) }
             .refreshable { await load(submission) }
         }
+        .threadPromptHost(.threadList)
         .onDisappear { lookup.invalidate(); presentationID = UUID() }
         .presentationDetents([.medium, .large])
     }
@@ -496,7 +497,7 @@ struct ThreadsView: View {
             model.open(channel: thread.id, message: nil)
         } label: {
             HStack {
-                Image(systemName: "bubble.left.fill").foregroundStyle(Color.textMuted)
+                Image(systemName: thread.threadMetadata?.locked == true ? "lock.fill" : "bubble.left.fill").foregroundStyle(Color.textMuted)
                 Text(thread.name ?? "").font(.body.weight(store.isUnread(thread) ? .semibold : .regular))
                 Spacer()
                 if let count = thread.messageCount { Text("\(count)").font(.caption).foregroundStyle(Color.textMuted) }
@@ -504,7 +505,8 @@ struct ThreadsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu { ChannelReadButton(channel: thread.id) }
+        .accessibilityValue(thread.threadMetadata?.locked == true ? "Locked" : "")
+        .contextMenu { ThreadContextMenu(thread: thread.id) }
     }
 }
 
@@ -530,7 +532,9 @@ struct ForumView: View {
         guard let submission else { lookup.invalidate(); return }
         let api = model.api, targetStore = store, forum = channel
         let request = lookup.start(submission, load: { offset in
-            .forum(try await api.forumThreads(channel: submission.forum, offset: offset), forum: forum)
+            let revision = targetStore.channelRevision
+            return .forum(try await api.forumThreads(channel: submission.forum, offset: offset),
+                          forum: forum, store: targetStore, since: revision)
         }, isCurrent: { self.submission == submission }, publish: { page in
             targetStore.remember(threads: page.rows)
         })
@@ -563,7 +567,8 @@ struct ForumView: View {
     var body: some View {
         List {
             let snapshot = lookup.snapshot(for: submission)
-            let posts = snapshot.rows
+            // Posts follow the store, so a renamed, closed or deleted post updates in place.
+            let posts = snapshot.rows.compactMap { store.channel($0.id) ?? (store.isReady ? nil : $0) }
             if case .failed(let error) = snapshot.status {
                 ContentUnavailableView("Couldn't Load Posts", systemImage: "exclamationmark.triangle", description: Text(error))
                 Button("Reload Posts") { Task { await load(submission) } }
@@ -595,6 +600,7 @@ struct ForumView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityHint("Opens the forum post")
+                        .contextMenu { ThreadContextMenu(thread: post.id) }
                         if let scope = content.revealScope {
                             Button("Reveal message") {
                                 if revealIdentity != submission { reveals.removeAll(); revealIdentity = submission }
@@ -635,6 +641,7 @@ struct ForumView: View {
         }
         .task(id: submission) { await load(submission) }
         .refreshable { await load(submission) }
+        .threadPromptHost(.forum)
         .onDisappear { lookup.invalidate(); reveals.removeAll(); revealIdentity = nil }
     }
 }

@@ -178,13 +178,24 @@ final class OtherListState<Input: Equatable, Row: Identifiable, Cursor: Equatabl
 /// Production consumers capture immutable API/parent references here; tests
 /// exercise these same entry points with held offline loads.
 enum OtherListConsumers {
-    static func archivedRows(_ rows: [Channel], active: [Channel], store: DiscordStore? = nil) -> [Channel] {
+    static func archivedRows(_ rows: [Channel], active: [Channel], store: DiscordStore? = nil,
+                             parent: Snowflake? = nil) -> [Channel] {
         let ids = Set(active.map(\.id))
-        return rows.compactMap { row in
-            guard !ids.contains(row.id) else { return nil }
+        let loaded = Set(rows.map(\.id))
+        // A just-closed active thread is newer than the archive paging cursor.
+        // Include known archives without refetching or changing that cursor.
+        let recent = parent.flatMap { parent in
+            store?.knownThreads(in: parent).filter {
+                !loaded.contains($0.id) && $0.threadMetadata?.archived == true && store?.canView($0) == true
+            }
+        } ?? []
+        var seen = Set<Snowflake>()
+        return (recent + rows).compactMap { row in
+            guard !ids.contains(row.id), seen.insert(row.id).inserted else { return nil }
             guard let store else { return row }
             guard let current = store.channel(row.id),
-                  current.type == .publicThread, current.parentID == row.parentID,
+                  current.type.isThread, current.parentID == row.parentID,
+                  parent == nil || current.parentID == parent,
                   row.guildID == nil || current.guildID == row.guildID,
                   current.threadMetadata?.archived == true else { return nil }
             return current

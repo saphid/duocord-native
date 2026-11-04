@@ -11,6 +11,16 @@ struct NotificationContextMenu: View {
         if model.notificationSaves[target.resource, default: 0] > 0 {
             Text("Saving notification settings…")
         }
+        // A thread's preference needs membership: its settings page explains
+        // and offers Join Thread rather than saving anything here.
+        if store.needsThreadMembership(target) {
+            Button("Notification Settings", systemImage: "bell.badge") { model.present(.notifications(target)) }
+        } else {
+            muteAndSettings
+        }
+    }
+
+    @ViewBuilder private var muteAndSettings: some View {
         if store.isDirectlyMuted(target) {
             Button("Unmute", systemImage: "bell") { model.muteNotifications(target, for: nil) }
         }
@@ -54,24 +64,40 @@ struct NotificationSettingsView: View {
                     } else if inheritedMute {
                         Label("Muted by server or parent", systemImage: "bell.slash")
                     }
-                    Menu("Mute for…", systemImage: "bell.slash") {
-                        ForEach(MuteDuration.allCases, id: \.self) { duration in
-                            Button(duration.title) { model.muteNotifications(target, for: duration) }
+                    if !needsMembership {
+                        Menu("Mute for…", systemImage: "bell.slash") {
+                            ForEach(MuteDuration.allCases, id: \.self) { duration in
+                                Button(duration.title) { model.muteNotifications(target, for: duration) }
+                            }
                         }
                     }
                 }
-                Section {
-                    Picker("Notify me about", selection: Binding(
-                        get: { store.notificationLevel(target) },
-                        set: { model.changeNotifications(target, patch: NotificationPatch(level: $0)) }
-                    )) {
-                        ForEach(levels, id: \.self) { level in Text(level.title).tag(level) }
+                if needsMembership, let id = target.channelID {
+                    Section {
+                        Text("Join this thread to choose its own notifications. Until then it follows the parent channel.")
+                            .foregroundStyle(.secondary)
+                        if model.threadCapabilities(id).canJoin {
+                            Button(model.threads.isSaving(id) ? "Joining…" : "Join Thread", systemImage: "plus.bubble") {
+                                model.perform(.join, on: id)
+                            }
+                            .disabled(model.threads.isSaving(id))
+                        }
                     }
-                    .pickerStyle(.inline)
-                } header: { Text("Messages") } footer: {
-                    Text(target.resource == 0
-                         ? "Inherit follows the private message default. Muting silences notifications without changing this preference."
-                         : "Inherit follows the parent channel, then server settings and the server default. Muting silences notifications without changing this preference.")
+                    .accessibilityIdentifier("threadNotificationsJoin")
+                } else {
+                    Section {
+                        Picker("Notify me about", selection: Binding(
+                            get: { store.notificationLevel(target) },
+                            set: { model.changeNotifications(target, patch: NotificationPatch(level: $0)) }
+                        )) {
+                            ForEach(levels, id: \.self) { level in Text(level.title).tag(level) }
+                        }
+                        .pickerStyle(.inline)
+                    } header: { Text("Messages") } footer: {
+                        Text(target.resource == 0
+                             ? "Inherit follows the private message default. Muting silences notifications without changing this preference."
+                             : "Inherit follows the parent channel, then server settings and the server default. Muting silences notifications without changing this preference.")
+                    }
                 }
                 if target.channelID == nil, target.resource != 0 {
                     Section("Mentions") {
@@ -114,7 +140,10 @@ struct NotificationSettingsView: View {
         return NotificationLevel.allCases
     }
 
+    private var needsMembership: Bool { store.needsThreadMembership(target) }
+
     private var muteConfig: MuteConfig? {
+        if let id = target.channelID, store.channel(id)?.type.isThread == true { return store.threadMember(id)?.muteConfig }
         let settings = store.guildSettings[target.resource]
         if let id = target.channelID { return settings?.channelOverrides.first { $0.channelID == id }?.muteConfig }
         return settings?.muteConfig

@@ -88,6 +88,7 @@ final class AppModel {
 
     // Navigation
     let people = PeopleOperations()
+    let threads = ThreadOperations()
     @ObservationIgnored var navigationIntent = UUID()
     @ObservationIgnored private let injectedMock: MockDiscord?
     @ObservationIgnored private let injectedMockWrites: Bool
@@ -271,6 +272,8 @@ final class AppModel {
         if membersVisible, columnVisibility == .detailOnly { columnVisibility = .all }
     }
     var expandedFolders: Set<Int64> = []
+    /// Channels whose threads are hidden in the sidebar (see `toggleThreads(under:)`).
+    var collapsedThreadParents: Set<Snowflake> = []
     @ObservationIgnored private var lastChannelByGuild: [Snowflake: Snowflake] = [:]
     @ObservationIgnored private var lastSelectedChannel: Snowflake?
 
@@ -347,6 +350,7 @@ final class AppModel {
     }
 
     private(set) var notificationSaves: [Snowflake: Int] = [:]
+    var notificationSessionID: UUID { notificationSession }
     private(set) var notificationErrors: [Snowflake: String] = [:]
     @ObservationIgnored private var notificationWrites: [Snowflake: Task<Void, Never>] = [:]
     @ObservationIgnored private var notificationSession = UUID()
@@ -365,12 +369,17 @@ final class AppModel {
             await previous?.value
             guard let self, self.notificationSession == session, !Task.isCancelled else { return }
             self.notificationErrors[resource] = nil
-            let versions = self.store.notificationVersions(for: resource)
-            let requested = Set(GuildSettingsUpdate(fields: patch.fields(for: target)).leaves.keys)
             do {
-                let result = try await api.patchNotificationSettings(target: target, patch: patch)
-                guard self.notificationSession == session else { return }
-                try self.store.applyNotificationSettings(result, resource: resource, requested: requested, versions: versions)
+                // A thread's preference lives on its thread member, not in guild overrides.
+                if let thread = target.channelID, self.store.channel(thread)?.type.isThread == true {
+                    try await self.saveThreadNotifications(thread, patch: patch, api: api, session: session)
+                } else {
+                    let versions = self.store.notificationVersions(for: resource)
+                    let requested = Set(GuildSettingsUpdate(fields: patch.fields(for: target)).leaves.keys)
+                    let result = try await api.patchNotificationSettings(target: target, patch: patch)
+                    guard self.notificationSession == session else { return }
+                    try self.store.applyNotificationSettings(result, resource: resource, requested: requested, versions: versions)
+                }
             } catch {
                 guard self.notificationSession == session else { return }
                 self.notificationErrors[resource] = error.localizedDescription
@@ -478,6 +487,8 @@ final class AppModel {
         selectedGuild = nil
         cancelNotificationWrites()
         cancelReadOperations()
+        threads.reset()
+        collapsedThreadParents = []
         unreadMarkers = [:]
         api = OfflineAPI()
         phase = .signedOut
@@ -582,6 +593,14 @@ final class AppModel {
                 unreadMarkers[channel] = nil
                 unreadTargets[channel] = nil
                 automaticReadCeilings[channel] = nil
+            }
+            updateBadge()
+        case "CHANNEL_DELETE", "THREAD_DELETE":
+            // Whoever deleted it, the open conversation falls back to its parent.
+            let selected = selectedChannel.flatMap { store.channel($0) }
+            store.handle(dispatch)
+            if let selected, store.channel(selected.id) == nil {
+                if selected.type.isThread { threadRemoved(selected.id, parent: selected.parentID) } else { validateSelection() }
             }
             updateBadge()
         default:

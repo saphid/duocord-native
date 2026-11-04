@@ -548,6 +548,12 @@ final class DiscordStore {
         var hiddenThreads = 0
         var rollup = ThreadRollup()
         var showsVoice = false
+        /// Threads the sidebar can list under this channel (its disclosure shows when > 0).
+        var threadCount = 0
+        /// The channel's own thread disclosure is collapsed.
+        var threadsCollapsed = false
+        /// A collapsed category's chevron owns visibility, so its channels offer no thread disclosure.
+        var showsThreadDisclosure = false
         var id: Snowflake { channel.id }
     }
 
@@ -594,8 +600,11 @@ final class DiscordStore {
     /// The guild's sidebar rows, as ChannelList draws them. Beyond the most
     /// recent few, a parent lists only threads needing attention until
     /// expanded; a collapsed category keeps only what needs attention or is open.
+    /// A parent in `threadsCollapsed` hides every thread row under it, unread,
+    /// mentioned and open ones included: the user asked to hide them. The
+    /// parent row still draws only its own state; its disclosure says what it hides.
     func channelList(for guildID: Snowflake, collapsed: Set<Snowflake> = [], expanded: Set<Snowflake> = [],
-                     selected: Snowflake? = nil) -> [ChannelListSection] {
+                     threadsCollapsed: Set<Snowflake> = [], selected: Snowflake? = nil) -> [ChannelListSection] {
         sections(for: guildID).map { section in
             let isCollapsed = section.category.map { collapsed.contains($0.id) } ?? false
             let entries = section.channels.compactMap { channel -> ChannelListEntry? in
@@ -607,14 +616,18 @@ final class DiscordStore {
                     return ChannelListEntry(channel: channel, threads: threads.filter { attention.contains($0.id) }, rollup: rollup)
                 }
                 let shown: [Channel]
-                if expanded.contains(channel.id) || threads.count <= Self.sidebarThreadLimit {
+                let folded = threadsCollapsed.contains(channel.id)
+                if folded {
+                    shown = []
+                } else if expanded.contains(channel.id) || threads.count <= Self.sidebarThreadLimit {
                     shown = threads
                 } else {
                     let recent = Set(threads.prefix(Self.sidebarThreadLimit).map(\.id))
                     shown = threads.filter { recent.contains($0.id) || attention.contains($0.id) }
                 }
                 return ChannelListEntry(channel: channel, threads: shown, hiddenThreads: threads.count - shown.count,
-                                        rollup: rollup, showsVoice: channel.type.isVoice)
+                                        rollup: rollup, showsVoice: channel.type.isVoice, threadCount: threads.count,
+                                        threadsCollapsed: folded, showsThreadDisclosure: !threads.isEmpty)
             }
             return ChannelListSection(category: section.category, collapsed: isCollapsed, entries: entries)
         }
@@ -774,10 +787,15 @@ final class DiscordStore {
     private func scheduleMuteExpiry() {
         muteExpiryTask?.cancel()
         let now = notificationClock()
-        let deadlines = guildSettings.values.flatMap { settings -> [Date] in
+        var deadlines = guildSettings.values.flatMap { settings -> [Date] in
             var ends = settings.channelOverrides.filter(\.muted).compactMap { $0.muteConfig?.endTime.flatMap(DiscordDate.parse) }
             if settings.muted, let end = settings.muteConfig?.endTime.flatMap(DiscordDate.parse) { ends.append(end) }
             return ends
+        }
+        // Thread mutes live on the current user's thread members.
+        for id in joinedThreads {
+            if let member = channels[id]?.member, member.muted == true,
+               let end = member.muteConfig?.endTime.flatMap(DiscordDate.parse) { deadlines.append(end) }
         }
         guard let next = deadlines.filter({ $0 > now }).min() else { muteExpiryTask = nil; return }
         let delay = next.timeIntervalSince(now)
@@ -789,6 +807,10 @@ final class DiscordStore {
 
     func isDirectlyMuted(_ target: NotificationTarget) -> Bool {
         _ = notificationTimeRevision
+        if let id = target.channelID, channels[id]?.type.isThread == true {
+            guard let member = threadMember(id) else { return false }
+            return member.muted == true && isActiveMute(member.muteConfig)
+        }
         let settings = guildSettings[target.resource]
         if let id = target.channelID {
             guard let entry = settings?.channelOverrides.first(where: { $0.channelID == id }) else { return false }
@@ -815,6 +837,9 @@ final class DiscordStore {
     }
 
     func notificationLevel(_ target: NotificationTarget) -> NotificationLevel {
+        if let id = target.channelID, channels[id]?.type.isThread == true {
+            return ThreadMemberFlags.level(threadMember(id)?.flags)
+        }
         let settings = guildSettings[target.resource]
         let raw: Int
         if let id = target.channelID { raw = settings?.channelOverrides.first { $0.channelID == id }?.messageNotifications ?? 3 }
@@ -1103,21 +1128,88 @@ final class DiscordStore {
         if channel.type.isPrivate { sortPrivateChannels() }
     }
 
+    /// A confirmed join or leave. Leaving also forgets the READY membership
+    /// record, so the thread never reads as joined again from stale data.
+    func setThreadMembership(_ id: Snowflake, joined: Bool) {
+        if joined { recordThreadMembership(id, joinedAt: nil); return }
+        joinedThreads.remove(id)
+        if var thread = channels[id], thread.member != nil {
+            changedChannel(id)
+            thread.member = nil
+            channels[id] = thread
+        }
+    }
+
+    /// A channel or thread that no longer exists (confirmed delete or gateway).
+    func removeChannel(_ id: Snowflake) {
+        changedChannel(id)
+        if let channel = channels[id], channel.type == .dm {
+            for user in channel.recipients.map({ $0.map(\.id) }) ?? channel.recipientIDs ?? [] { dmVersions[user, default: 0] &+= 1 }
+        }
+        channels[id] = nil
+        joinedThreads.remove(id)
+        sortPrivateChannels()
+    }
+
     /// Threads and forum posts loaded over REST join the known channels.
     func remember(threads: [Channel]) {
         for thread in threads where channels[thread.id] == nil || channels[thread.id] != thread { upsert(channel: thread) }
+        if threads.contains(where: { $0.member != nil }) { scheduleMuteExpiry() }
     }
 
     /// All membership event shapes merge the same current-user reference.
     /// Missing fields keep known authority; an explicit new join replaces it.
-    private func recordThreadMembership(_ id: Snowflake, joinedAt stamp: String?) {
+    /// Notification settings the event carried are authoritative (gateway).
+    private func recordThreadMembership(_ id: Snowflake, joinedAt stamp: String?,
+                                        settings: ThreadMemberSettingsUpdate = ThreadMemberSettingsUpdate()) {
         joinedThreads.insert(id)
         guard var thread = channels[id] else { return }
-        let member = ThreadMemberRef(joinTimestamp: stamp ?? thread.member?.joinTimestamp)
-        guard thread.member != member else { return }
+        var member = thread.member ?? ThreadMemberRef(joinTimestamp: nil)
+        member.joinTimestamp = stamp ?? member.joinTimestamp
+        member = settings.applied(to: member)
+        for field in settings.fieldNames {
+            threadSettingsVersion &+= 1
+            threadSettingsVersions[id, default: [:]][field] = threadSettingsVersion
+        }
+        guard thread.member != member || settings.hasSettings else { return }
         changedChannel(id)
         thread.member = member
         channels[id] = thread
+        if settings.hasSettings { scheduleMuteExpiry() }
+    }
+
+    // MARK: Thread notification settings
+
+    @ObservationIgnored private var threadSettingsVersions: [Snowflake: [String: UInt64]] = [:]
+    @ObservationIgnored private var threadSettingsVersion: UInt64 = 0
+
+    /// The current user's thread member, when joined.
+    func threadMember(_ id: Snowflake) -> ThreadMemberRef? {
+        guard joinedThreads.contains(id) else { return nil }
+        return channels[id]?.member ?? ThreadMemberRef(joinTimestamp: nil)
+    }
+
+    func threadSettingsVersions(for id: Snowflake) -> [String: UInt64] { threadSettingsVersions[id] ?? [:] }
+
+    /// A confirmed settings response. Only fields this request asked for are
+    /// applied, and only if no newer (gateway) value arrived since it began.
+    /// Nothing is applied to a thread the user has since left.
+    func applyThreadSettings(_ update: ThreadMemberSettingsUpdate, thread id: Snowflake,
+                             requested: Set<String>, versions: [String: UInt64]) {
+        guard joinedThreads.contains(id), var thread = channels[id] else { return }
+        let fresh = update.fieldNames.intersection(requested).filter {
+            (threadSettingsVersions[id]?[$0] ?? 0) == (versions[$0] ?? 0)
+        }
+        guard !fresh.isEmpty else { return }
+        for field in fresh {
+            threadSettingsVersion &+= 1
+            threadSettingsVersions[id, default: [:]][field] = threadSettingsVersion
+        }
+        let member = update.applied(to: thread.member ?? ThreadMemberRef(joinTimestamp: nil), only: fresh)
+        changedChannel(id)
+        thread.member = member
+        channels[id] = thread
+        scheduleMuteExpiry()
     }
 
     func remember(messageAuthors messages: [Message]) {
@@ -1208,13 +1300,7 @@ final class DiscordStore {
                 upsert(channel: try dispatch.decode(Channel.self))
             case "CHANNEL_DELETE", "THREAD_DELETE":
                 struct Deleted: Decodable { var id: Snowflake }
-                let id = try dispatch.decode(Deleted.self).id
-                changedChannel(id)
-                if let channel = channels[id], channel.type == .dm {
-                    for user in channel.recipients.map({ $0.map(\.id) }) ?? channel.recipientIDs ?? [] { dmVersions[user, default: 0] &+= 1 }
-                }
-                channels[id] = nil
-                sortPrivateChannels()
+                removeChannel(try dispatch.decode(Deleted.self).id)
             case "THREAD_LIST_SYNC":
                 let sync = try dispatch.decode(ThreadListSync.self)
                 for var thread in sync.threads {
@@ -1222,7 +1308,7 @@ final class DiscordStore {
                     upsert(channel: thread)
                 }
                 for entry in sync.members ?? [] {
-                    if let id = entry.id { recordThreadMembership(id, joinedAt: entry.joinTimestamp) }
+                    if let id = entry.id { recordThreadMembership(id, joinedAt: entry.joinTimestamp, settings: entry.settings) }
                 }
             case "THREAD_MEMBER_UPDATE":
                 struct Mine: Decodable {
@@ -1232,7 +1318,9 @@ final class DiscordStore {
                 }
                 let mine = try dispatch.decode(Mine.self)
                 if let id = mine.id {
-                    recordThreadMembership(id, joinedAt: mine.joinTimestamp)
+                    // Also carries the thread's notification preference (flags, muted, mute_config).
+                    let settings = (try? dispatch.decode(ThreadMemberSettingsUpdate.self)) ?? ThreadMemberSettingsUpdate()
+                    recordThreadMembership(id, joinedAt: mine.joinTimestamp, settings: settings)
                 }
             case "THREAD_MEMBERS_UPDATE":
                 let update = try dispatch.decode(ThreadMembersUpdate.self)
@@ -1240,14 +1328,7 @@ final class DiscordStore {
                     if let added = update.addedMembers?.first(where: { $0.userID == me }) {
                         recordThreadMembership(update.id, joinedAt: added.joinTimestamp)
                     }
-                    if update.removedMemberIDs?.contains(me) == true {
-                        joinedThreads.remove(update.id)
-                        if var thread = channels[update.id] {
-                            changedChannel(update.id)
-                            thread.member = nil
-                            channels[update.id] = thread
-                        }
-                    }
+                    if update.removedMemberIDs?.contains(me) == true { setThreadMembership(update.id, joined: false) }
                 }
             case "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK":
                 struct Changed: Decodable { var channel_id: Snowflake }

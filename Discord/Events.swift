@@ -219,9 +219,17 @@ nonisolated struct ThreadListSync: Decodable, Sendable {
     struct MemberEntry: Decodable, Sendable {
         var id: Snowflake?
         var joinTimestamp: String?
+        /// The thread's notification preference, when the entry carries it.
+        var settings = ThreadMemberSettingsUpdate()
         enum CodingKeys: String, CodingKey {
             case id
             case joinTimestamp = "join_timestamp"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(Snowflake.self, forKey: .id)
+            joinTimestamp = try c.decodeIfPresent(String.self, forKey: .joinTimestamp)
+            settings = try ThreadMemberSettingsUpdate(from: decoder)
         }
     }
     var guildID: Snowflake

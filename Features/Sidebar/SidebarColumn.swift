@@ -358,6 +358,7 @@ struct ChannelList: View {
         List(selection: channelSelection) {
             Section {
                 ForEach(store.channelList(for: guildID, collapsed: collapsed, expanded: expandedThreads,
+                                          threadsCollapsed: model.collapsedThreadParents,
                                           selected: model.selectedChannel)) { section in
                     if let category = section.category {
                         CategoryHeader(name: category.name ?? "", collapsed: section.collapsed) {
@@ -373,14 +374,17 @@ struct ChannelList: View {
                     }
                     // A collapsed category still shows unread or selected channels, like Discord.
                     ForEach(section.entries) { entry in
-                        ChannelRow(channel: entry.channel, isThread: entry.channel.type.isThread)
+                        ChannelRow(channel: entry.channel, isThread: entry.channel.type.isThread,
+                                   disclosure: entry.showsThreadDisclosure ? entry : nil)
                             .tag(entry.channel.id)
                         ForEach(entry.threads) { thread in
                             ChannelRow(channel: thread, isThread: true)
                                 .tag(thread.id)
                         }
                         let expanded = expandedThreads.contains(entry.channel.id)
-                        if !section.collapsed, entry.hiddenThreads > 0 || (expanded && entry.threads.count > DiscordStore.sidebarThreadLimit) {
+                        // A folded parent's chevron owns its hidden threads; no overflow row meanwhile.
+                        if !section.collapsed, !entry.threadsCollapsed,
+                           entry.hiddenThreads > 0 || (expanded && entry.threads.count > DiscordStore.sidebarThreadLimit) {
                             ThreadOverflowRow(hidden: entry.hiddenThreads, expanded: expanded, parent: entry.channel.name ?? "") {
                                 withAnimation(.snappy(duration: 0.2)) {
                                     if expanded { expandedThreads.remove(entry.channel.id) } else { expandedThreads.insert(entry.channel.id) }
@@ -403,6 +407,7 @@ struct ChannelList: View {
         .focusEffectDisabled()
         .focusable(false)
         .accessibilityIdentifier("channelList")
+        .threadPromptHost(.sidebar)
     }
 
     private var channelSelection: Binding<Snowflake?> {
@@ -465,6 +470,8 @@ struct ChannelRow: View {
     @Environment(DiscordStore.self) private var store
     let channel: Channel
     var isThread = false
+    /// The channel's thread disclosure (channels with sidebar threads only).
+    var disclosure: DiscordStore.ChannelListEntry? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
     /// Breathing room that grows with the text, so larger text never fills the row edge to edge.
     @ScaledMetric(relativeTo: .body) private var verticalPadding: CGFloat = 4
@@ -521,6 +528,9 @@ struct ChannelRow: View {
                     .frame(minHeight: 18)
                     .background(Color.unreadRed, in: Capsule())
             }
+            if let disclosure {
+                ThreadDisclosureButton(entry: disclosure) { toggleThreads() }
+            }
         }
         .padding(.leading, isThread ? 12 : 0)
         .padding(.vertical, verticalPadding)
@@ -539,16 +549,34 @@ struct ChannelRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(isThread ? "Thread" : Self.kind(for: channel)) \(channel.name ?? "")")
         .accessibilityValue(badge.accessibilityValue)
+        .accessibilityHint(disclosure.map(ThreadDisclosureButton.hint) ?? "")
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityActions {
+            if let disclosure {
+                Button(ThreadDisclosureButton.title(collapsed: disclosure.threadsCollapsed)) { toggleThreads() }
+            }
+        }
         .contextMenu {
-            ChannelReadButton(channel: channel.id)
-            ThreadsReadButton(parent: channel)
-            NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
+            if isThread {
+                ThreadContextMenu(thread: channel.id)
+            } else {
+                ChannelReadButton(channel: channel.id)
+                ThreadsReadButton(parent: channel)
+                NotificationContextMenu(target: .channel(guild: channel.guildID, channel: channel.id))
+                if let disclosure {
+                    Button(ThreadDisclosureButton.title(collapsed: disclosure.threadsCollapsed),
+                           systemImage: disclosure.threadsCollapsed ? "chevron.down" : "chevron.up") { toggleThreads() }
+                }
+            }
         }
         .accessibilityIdentifier("channel-\(channel.id)")
         .focusEffectDisabled()
     }
 
+
+    private func toggleThreads() {
+        withAnimation(.snappy(duration: 0.2)) { model.toggleThreads(under: channel.id) }
+    }
 
     static func symbol(for channel: Channel) -> String {
         switch channel.type {
@@ -569,6 +597,50 @@ struct ChannelRow: View {
         case .forum, .media: "Forum"
         default: "Channel"
         }
+    }
+}
+
+/// A channel's thread disclosure: a chevron that hides or shows every thread
+/// row under it, with the count it hides while folded. Unread threads are not
+/// rolled into the channel's badge; the count and hint say what is hidden.
+/// Selecting the channel is the rest of the row, and folding never changes
+/// the open conversation.
+struct ThreadDisclosureButton: View {
+    let entry: DiscordStore.ChannelListEntry
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 3) {
+                if entry.threadsCollapsed, entry.hiddenThreads > 0 {
+                    Text("\(entry.hiddenThreads)")
+                        .font(.caption2.weight(.semibold))
+                        .monospacedDigit()
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .rotationEffect(.degrees(entry.threadsCollapsed ? -90 : 0))
+            }
+            .foregroundStyle(Color.textMuted)
+            .frame(minWidth: 30, minHeight: 34)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(Self.title(collapsed: entry.threadsCollapsed))
+        .accessibilityIdentifier("threads-toggle-\(entry.channel.id)")
+    }
+
+    static func title(collapsed: Bool) -> String { collapsed ? "Show Threads" : "Hide Threads" }
+
+    /// Spoken as a hint, so the row's value keeps only its own unread state.
+    static func hint(_ entry: DiscordStore.ChannelListEntry) -> String {
+        let count = entry.threadCount
+        let threads = "\(count) \(count == 1 ? "thread" : "threads")"
+        guard entry.threadsCollapsed else { return "\(threads) shown" }
+        var parts = ["\(threads) hidden"]
+        if entry.rollup.unreadThreads > 0 { parts.append("\(entry.rollup.unreadThreads) unread") }
+        if entry.rollup.mentions > 0 { parts.append(BadgeAccessibility.mentions(entry.rollup.mentions)) }
+        return parts.joined(separator: ", ")
     }
 }
 

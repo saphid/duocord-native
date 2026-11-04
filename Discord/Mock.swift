@@ -19,6 +19,27 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     static let imageChannel: Snowflake = 910_000_000_000_000_103
     static let generalChannel: Snowflake = 910_000_000_000_000_102
 
+    /// Thread fixture in Duo Design Lab, for sidebar collapse and thread menus.
+    /// In #image-dump your Designers role has Manage Threads (moderator menus);
+    /// in #general it doesn't, so only owner and member actions appear there.
+    enum ThreadFixture {
+        static let guild: Snowflake = 910_000_000_000_000_000
+        static let designersRole: Snowflake = 910_000_000_000_000_901
+        /// #general, unchanged since before this fixture: public, not joined.
+        static let bookPose: Snowflake = 910_000_000_000_000_500
+        /// #image-dump, yours, joined, unread with two mentions.
+        static let hinge: Snowflake = 910_000_000_000_000_501
+        /// #image-dump, someone else's, locked.
+        static let release: Snowflake = 910_000_000_000_000_502
+        /// #general, someone else's, not joined, unread.
+        static let screenshots: Snowflake = 910_000_000_000_000_503
+        /// #general, yours, joined.
+        static let foldPhotos: Snowflake = 910_000_000_000_000_504
+        /// #image-dump, private, someone else's, joined.
+        static let moderators: Snowflake = 910_000_000_000_000_505
+        static let unreadMentions: [Snowflake: Int] = [hinge: 2, screenshots: 0]
+    }
+
     init() {
         let names = [("aurora", "Aurora"), ("bramble", "Bramble"), ("cinder", "Cinder"), ("delta", "Delta Ray"),
                      ("ember", "Ember"), ("fjord", "Fjord"), ("galen", "Galen"), ("harbor", "Harbor Lights"),
@@ -61,6 +82,10 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                 var channel = Channel(id: id, type: type, guildID: guildID, name: name,
                                       topic: cIndex == 1 ? "Talk about anything. Be kind." : nil, position: cIndex, parentID: textCategory.id)
                 channel.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-Double(cIndex * 900)))
+                if id == Self.imageChannel {
+                    channel.permissionOverwrites = [PermissionOverwrite(id: ThreadFixture.designersRole, type: 0,
+                                                                        allow: String(Permission.manageThreads), deny: "0")]
+                }
                 channels.append(channel)
             }
             channels.append(Channel(id: Snowflake(guildID.raw + 200), type: .voice, guildID: guildID, name: "Lounge", position: 0, parentID: voiceCategory.id))
@@ -82,12 +107,32 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                                 "fire_fold", "fidget_hinge", "first_light", "fold_wave"].enumerated().map { index, name in
                     Emoji(id: Snowflake(1_000 + UInt64(index)), name: name, animated: index == 4 || index == 7)
                 }
-                // A thread under #general.
-                var thread = Channel(id: Snowflake(guildID.raw + 500), type: .publicThread, guildID: guildID, name: "Book pose feedback",
-                                     parentID: 910_000_000_000_000_102)
-                thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-3600))
-                thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
-                guild.threads = [thread] + Self.manyThreads(guild: guildID)
+                // Threads under #general and #image-dump (see `ThreadFixture`).
+                func thread(_ id: Snowflake, _ name: String, parent: Snowflake, type: ChannelType = .publicThread, owner: Snowflake?,
+                            minutesAgo: Double, locked: Bool = false, joined: Bool = false, member: ThreadMemberRef? = nil) -> Channel {
+                    var thread = Channel(id: id, type: type, guildID: guildID, name: name, parentID: parent)
+                    thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-minutesAgo * 60))
+                    thread.threadMetadata = ThreadMetadata(archived: false, locked: locked)
+                    thread.ownerID = owner
+                    thread.messageCount = 12
+                    if joined { thread.member = member ?? ThreadMemberRef(joinTimestamp: "2026-11-01T00:00:00Z", flags: ThreadMemberFlags.hasInteracted) }
+                    return thread
+                }
+                guild.threads = [
+                    thread(ThreadFixture.bookPose, "Book pose feedback", parent: Self.generalChannel, owner: nil, minutesAgo: 60),
+                    // Your existing thread preference: Only Mentions.
+                    thread(ThreadFixture.hinge, "Hinge animation timing", parent: Self.imageChannel, owner: me.id, minutesAgo: 20, joined: true,
+                           member: ThreadMemberRef(joinTimestamp: "2026-11-01T00:00:00Z",
+                                                   flags: ThreadMemberFlags.hasInteracted | ThreadMemberFlags.onlyMentions)),
+                    thread(ThreadFixture.release, "Release checklist", parent: Self.imageChannel, owner: users[1].id, minutesAgo: 120, locked: true),
+                    // Muted until turned back on.
+                    thread(ThreadFixture.moderators, "Moderator notes", parent: Self.imageChannel, type: .privateThread, owner: users[2].id,
+                           minutesAgo: 180, joined: true,
+                           member: ThreadMemberRef(joinTimestamp: "2026-11-01T00:00:00Z", flags: ThreadMemberFlags.hasInteracted,
+                                                   muted: true, muteConfig: MuteConfig(endTime: nil, selectedTimeWindow: -1))),
+                    thread(ThreadFixture.screenshots, "Screenshot requests", parent: Self.generalChannel, owner: users[3].id, minutesAgo: 30),
+                    thread(ThreadFixture.foldPhotos, "My fold photos", parent: Self.generalChannel, owner: me.id, minutesAgo: 240, joined: true),
+                ] + Self.manyThreads(guild: guildID)
             }
             if gIndex == 1 {
                 guild.emojis = ["swift_bird", "layout_grid"].enumerated().map { index, name in
@@ -229,6 +274,13 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
             }
         }
         reads += manyThreads.map { ReadState(id: $0.id, lastMessageID: Snowflake(1), mentionCount: 0) }
+        let liveGuilds = currentGuilds()
+        for guild in liveGuilds {
+            for thread in guild.threads where !Self.isManyThreadsFixture(thread.id) {
+                let mentions = ThreadFixture.unreadMentions[thread.id]
+                reads.append(ReadState(id: thread.id, lastMessageID: mentions == nil ? thread.lastMessageID : Snowflake(1), mentionCount: mentions ?? 0))
+            }
+        }
         for dm in dms {
             reads.append(ReadState(id: dm.id, lastMessageID: dm.id.raw % 3 == 1 ? Snowflake(1) : dm.lastMessageID,
                                    mentionCount: dm.id.raw % 3 == 1 ? 2 : 0))
@@ -237,7 +289,7 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         reads = reads.map { saved.0[$0.id] ?? $0 }
         let known = Set(reads.map(\.id))
         reads += saved.0.values.filter { !known.contains($0.id) }
-        var ready = ReadyPayload(user: me, guilds: guilds, privateChannels: dms + lock.withLock { Array(createdDMs.values) }, users: users, mergedMembers: members,
+        var ready = ReadyPayload(user: me, guilds: liveGuilds, privateChannels: dms + lock.withLock { Array(createdDMs.values) }, users: users, mergedMembers: members,
                             readStates: reads, guildSettings: [], settingsProto: Self.foldersProto(guilds: guilds.map(\.id)))
         ready.relationships = peopleReadyRelationships
         ready.readStateVersion = saved.1
@@ -459,21 +511,44 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     }
 
     func forumThreads(channel: Snowflake, offset: Int) async throws -> ThreadSearchResult {
-        let titles = ["Book pose: where should the composer go?", "Table-top layout sketches", "Closed display density",
-                      "Members panel in split view", "Hinge-aware image viewer", "Dynamic Type at XXL on the outer display"]
+        let titles = Self.forumTitles
         var threads: [Channel] = []
         var firsts: [Message] = []
         for (index, title) in titles.enumerated() {
             let id = Snowflake(channel.raw * 10 + UInt64(index))
-            var thread = Channel(id: id, type: .publicThread, guildID: guilds[0].id, name: title, parentID: channel)
-            thread.messageCount = 4 + index * 7
-            thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-Double(index) * 7200))
-            thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
+            var thread = forumFixture(forum: channel, index: index)
+            // A renamed, closed or deleted post reads back as such.
+            let state: Channel?? = lock.withLock { deletedThreads.contains(id) ? .some(nil) : threadOverrides[id].map { .some($0) } }
+            if let state { guard let changed = state else { continue }; thread = changed }
             threads.append(thread)
             firsts.append(Message(id: id, channelID: id, guildID: guilds[0].id, author: users[index % users.count],
                                   content: "Opening thoughts on \(title.lowercased()). What have you tried?", timestamp: ISO8601DateFormatter().string(from: .now)))
         }
         return ThreadSearchResult(threads: threads, firstMessages: firsts, hasMore: false)
+    }
+
+    private static let forumTitles = ["Book pose: where should the composer go?", "Table-top layout sketches", "Closed display density",
+                                      "Members panel in split view", "Hinge-aware image viewer", "Dynamic Type at XXL on the outer display"]
+
+    private func forumFixture(forum: Snowflake, index: Int) -> Channel {
+        let id = Snowflake(forum.raw * 10 + UInt64(index))
+        var thread = Channel(id: id, type: .publicThread, guildID: guilds[0].id, name: Self.forumTitles[index], parentID: forum)
+        thread.messageCount = 4 + index * 7
+        thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-Double(index) * 7200))
+        thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
+        // Every other post is yours, so owner actions show in the forum too.
+        thread.ownerID = index % 2 == 0 ? me.id : users[index % users.count].id
+        return thread
+    }
+
+    private func archivedFixture(parent: Snowflake, guild: Snowflake?, index: Int) -> Channel {
+        let formatter = ISO8601DateFormatter()
+        var thread = Channel(id: Snowflake(parent.raw + 1_000_000 + UInt64(index)), type: .publicThread,
+                             guildID: guild, name: "Archived offline thread \(index + 1)", parentID: parent)
+        thread.threadMetadata = ThreadMetadata(archived: true, locked: index % 5 == 4,
+            archiveTimestamp: formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000 - Double(index))))
+        thread.ownerID = index % 3 == 0 ? me.id : users[index % users.count].id
+        return thread
     }
 
     func archivedThreads(channel: Snowflake) async throws -> [Channel] { [] }
@@ -482,14 +557,22 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         // Dedicated stable offline fixture, unrelated to live Discord accounts.
         let formatter = ISO8601DateFormatter()
         let cutoff = before.flatMap { formatter.date(from: $0) }
-        let rows = (0..<63).map { index -> Channel in
-            var thread = Channel(id: Snowflake(channel.raw + 1_000_000 + UInt64(index)), type: .publicThread,
-                                 guildID: guilds.first(where: { $0.channels.contains(where: { $0.id == channel }) })?.id,
-                                 name: "Archived offline thread \(index + 1)", parentID: channel)
-            thread.threadMetadata = ThreadMetadata(archived: true, locked: false,
-                archiveTimestamp: formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000 - Double(index))))
-            return thread
-        }.filter { row in
+        let guild = guilds.first(where: { $0.channels.contains(where: { $0.id == channel }) })?.id
+        // Reopened and deleted threads leave the archive; renamed ones read back renamed.
+        let (overrides, deleted) = lock.withLock { (threadOverrides, deletedThreads) }
+        let fixtures = (0..<63).compactMap { index -> Channel? in
+            let row = archivedFixture(parent: channel, guild: guild, index: index)
+            guard !deleted.contains(row.id) else { return nil }
+            let current = overrides[row.id] ?? row
+            return current.threadMetadata?.archived == true ? current : nil
+        }
+        // Threads you closed here are the newest archive entries.
+        let fixtureIDs = Set(fixtures.map(\.id))
+        let closed = overrides.values.filter {
+            $0.parentID == channel && $0.threadMetadata?.archived == true && !fixtureIDs.contains($0.id)
+                && !(channel.raw + 1_000_000..<channel.raw + 1_000_063).contains($0.id.raw)
+        }.sorted { ($0.threadMetadata?.archiveTimestamp ?? "") > ($1.threadMetadata?.archiveTimestamp ?? "") }
+        let rows = (closed + fixtures).filter { row in
             guard let cutoff else { return before == nil }
             return formatter.date(from: row.threadMetadata!.archiveTimestamp!)! < cutoff
         }
@@ -672,6 +755,172 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         // Null when no pins remain; omitted when only generated (untimed) pins do.
         if let latest { event["last_pin_timestamp"] = .string(latest) } else if remaining.isEmpty { event["last_pin_timestamp"] = .null }
         emit("CHANNEL_PINS_UPDATE", event)
+    }
+
+    // MARK: Thread writes
+
+    struct ThreadRecord: Sendable, Equatable {
+        var method: String
+        var route: String
+        var fields: [String: JSONValue]?
+    }
+    private var threadRecords: [ThreadRecord] = []
+    private var threadOverrides: [Snowflake: Channel] = [:]
+    private var deletedThreads: Set<Snowflake> = []
+    private var threadMembership: [Snowflake: Bool] = [:]
+    /// Thread members whose notification settings were written.
+    private var threadMemberSettings: [Snowflake: ThreadMemberRef] = [:]
+
+    /// Your thread member now (call with `lock` held): nil when not joined.
+    private func memberLocked(_ id: Snowflake) -> ThreadMemberRef? {
+        if threadMembership[id] == false || deletedThreads.contains(id) { return nil }
+        if let written = threadMemberSettings[id] { return written }
+        if threadMembership[id] == true { return ThreadMemberRef(joinTimestamp: "2026-11-01T00:00:00Z", flags: 0) }
+        return guilds.flatMap(\.threads).first { $0.id == id }?.member
+    }
+    var threadOperations: [ThreadRecord] { lock.withLock { threadRecords } }
+    #if DEBUG
+    private var threadFailure = false
+    var failNextThreadWrite: Bool {
+        get { lock.withLock { threadFailure } }
+        set { lock.withLock { threadFailure = newValue } }
+    }
+    #endif
+
+    /// The guilds as READY would describe them now: renamed, closed, locked,
+    /// deleted, joined and left threads included. Archived threads are not
+    /// active, so READY omits them (they come back through archive lookups).
+    func currentGuilds() -> [Guild] {
+        lock.withLock {
+            guilds.map { guild in
+                var copy = guild
+                copy.threads = guild.threads.compactMap { base -> Channel? in
+                    guard !deletedThreads.contains(base.id) else { return nil }
+                    var thread = threadOverrides[base.id] ?? base
+                    thread.member = memberLocked(base.id)
+                    return thread.threadMetadata?.archived == true ? nil : thread
+                }
+                return copy
+            }
+        }
+    }
+
+    /// A thread this mock knows: the READY fixture, a forum post, or an archive row.
+    private func knownThread(_ id: Snowflake) -> Channel? {
+        let state: Channel?? = lock.withLock {
+            if deletedThreads.contains(id) { return .some(nil) }
+            return threadOverrides[id].map { .some($0) }
+        }
+        if let state { return state }
+        if let fixture = guilds.flatMap(\.threads).first(where: { $0.id == id }) { return fixture }
+        for guild in guilds {
+            for channel in guild.channels where channel.type.isTextLike {
+                let offset = id.raw &- (channel.id.raw &+ 1_000_000)
+                if id.raw >= channel.id.raw + 1_000_000, offset < 63 {
+                    return archivedFixture(parent: channel.id, guild: guild.id, index: Int(offset))
+                }
+            }
+            for forum in guild.channels where forum.type.isForumLike {
+                let offset = id.raw &- forum.id.raw &* 10
+                if id.raw >= forum.id.raw &* 10, offset < 6 {
+                    return forumFixture(forum: forum.id, index: Int(offset))
+                }
+            }
+        }
+        return nil
+    }
+
+    private func performThread(_ record: ThreadRecord) async throws {
+        try await Task.sleep(for: .milliseconds(150))
+        lock.withLock { threadRecords.append(record) }
+        // `-DuocordMockThreadFail YES`: every thread write fails (error toasts).
+        try failIfAsked("DuocordMockThreadFail")
+        #if DEBUG
+        let fail = lock.withLock { let value = threadFailure; threadFailure = false; return value }
+        if fail { throw DiscordError.http(403, "Missing Permissions") }
+        #endif
+    }
+
+    func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel {
+        try await performThread(ThreadRecord(method: "PATCH", route: "channels/\(thread)", fields: patch.fields))
+        guard var channel = knownThread(thread) else { throw DiscordError.http(404, "Unknown Channel") }
+        var metadata = channel.threadMetadata ?? ThreadMetadata(archived: false, locked: false)
+        if let name = patch.name { channel.name = name }
+        if let archived = patch.archived {
+            metadata.archived = archived
+            metadata.archiveTimestamp = ISO8601DateFormatter().string(from: .now)
+        }
+        if let locked = patch.locked { metadata.locked = locked }
+        channel.threadMetadata = metadata
+        channel.member = lock.withLock { memberLocked(thread) }
+        let updated = channel
+        lock.withLock { threadOverrides[thread] = updated }
+        emit("THREAD_UPDATE", updated)
+        return updated
+    }
+
+    func deleteThread(_ thread: Snowflake) async throws {
+        try await performThread(ThreadRecord(method: "DELETE", route: "channels/\(thread)", fields: nil))
+        guard let channel = knownThread(thread) else { throw DiscordError.http(404, "Unknown Channel") }
+        lock.withLock { _ = deletedThreads.insert(thread); threadOverrides[thread] = nil }
+        struct Deleted: Encodable { var id: Snowflake; var guild_id: Snowflake?; var parent_id: Snowflake?; var type: Int }
+        emit("THREAD_DELETE", Deleted(id: thread, guild_id: channel.guildID, parent_id: channel.parentID, type: channel.type.rawValue))
+    }
+
+    func joinThread(_ thread: Snowflake) async throws {
+        try await performThread(ThreadRecord(method: "PUT", route: "channels/\(thread)/thread-members/@me", fields: nil))
+        guard knownThread(thread) != nil else { throw DiscordError.http(404, "Unknown Channel") }
+        lock.withLock { threadMembership[thread] = true; threadMemberSettings[thread] = nil }
+        let fields: [String: JSONValue] = ["id": .string(thread.description), "guild_id": .string(ThreadFixture.guild.description),
+            "member_count": .number(2), "added_members": .array([.object(["id": .string(thread.description),
+            "user_id": .string(me.id.description), "join_timestamp": .string(ISO8601DateFormatter().string(from: .now)), "flags": .number(0)])])]
+        emit("THREAD_MEMBERS_UPDATE", fields)
+    }
+
+    func leaveThread(_ thread: Snowflake) async throws {
+        try await performThread(ThreadRecord(method: "DELETE", route: "channels/\(thread)/thread-members/@me", fields: nil))
+        guard knownThread(thread) != nil else { throw DiscordError.http(404, "Unknown Channel") }
+        lock.withLock { threadMembership[thread] = false; threadMemberSettings[thread] = nil }
+        let fields: [String: JSONValue] = ["id": .string(thread.description), "guild_id": .string(ThreadFixture.guild.description),
+            "member_count": .number(1), "removed_member_ids": .array([.string(me.id.description)])]
+        emit("THREAD_MEMBERS_UPDATE", fields)
+    }
+
+    /// Thread notification settings, as Discord applies them: membership
+    /// required; HAS_INTERACTED is not client-settable; 204 (nil) when nothing
+    /// changed; otherwise THREAD_MEMBER_UPDATE, then the thread member.
+    func modifyThreadSettings(_ thread: Snowflake, fields: [String: JSONValue]) async throws -> ThreadMemberSettingsUpdate? {
+        try await performThread(ThreadRecord(method: "PATCH", route: "channels/\(thread)/thread-members/@me/settings", fields: fields))
+        guard let channel = knownThread(thread) else { throw DiscordError.http(404, "Unknown Channel") }
+        var update = ThreadMemberSettingsUpdate(fields: fields)
+        enum Outcome { case notMember, unchanged, changed(ThreadMemberRef) }
+        let outcome: Outcome = lock.withLock {
+            guard let member = memberLocked(thread) else { return .notMember }
+            if let flags = update.flags {
+                update.flags = (flags & ~ThreadMemberFlags.hasInteracted) | ((member.flags ?? 0) & ThreadMemberFlags.hasInteracted)
+            }
+            var next = update.applied(to: member)
+            if next.muted == false { next.muteConfig = nil }
+            guard next != member else { return .unchanged }
+            threadMemberSettings[thread] = next
+            return .changed(next)
+        }
+        switch outcome {
+        case .notMember: throw DiscordError.http(404, "Unknown Member")
+        case .unchanged: return nil
+        case .changed(let member):
+            var payload: [String: JSONValue] = [
+                "id": .string(thread.description), "user_id": .string(me.id.description),
+                "join_timestamp": member.joinTimestamp.map(JSONValue.string) ?? .null,
+                "flags": .number(Double(member.flags ?? 0)), "muted": .bool(member.muted ?? false),
+                "mute_config": member.muteConfig.map { config -> JSONValue in
+                    JSONValue.object(["end_time": config.endTime.map(JSONValue.string) ?? JSONValue.null,
+                                      "selected_time_window": config.selectedTimeWindow.map { JSONValue.number(Double($0)) } ?? JSONValue.null])
+                } ?? JSONValue.null]
+            emit("THREAD_MEMBER_UPDATE", payload.merging(["guild_id": .string((channel.guildID ?? ThreadFixture.guild).description)]) { a, _ in a })
+            payload["guild_id"] = nil
+            return ThreadMemberSettingsUpdate(fields: payload)
+        }
     }
 
     struct PeopleRecord: Sendable {

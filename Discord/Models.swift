@@ -162,9 +162,30 @@ nonisolated struct ThreadMetadata: Codable, Hashable, Sendable {
     }
 }
 
+/// The current user's thread member: membership plus the thread's own
+/// notification preference (see `ThreadMemberFlags`).
 nonisolated struct ThreadMemberRef: Codable, Hashable, Sendable {
     var joinTimestamp: String?
-    enum CodingKeys: String, CodingKey { case joinTimestamp = "join_timestamp" }
+    var flags: Int?
+    var muted: Bool?
+    var muteConfig: MuteConfig?
+    enum CodingKeys: String, CodingKey {
+        case flags, muted
+        case joinTimestamp = "join_timestamp"
+        case muteConfig = "mute_config"
+    }
+
+    init(joinTimestamp: String? = nil, flags: Int? = nil, muted: Bool? = nil, muteConfig: MuteConfig? = nil) {
+        self.joinTimestamp = joinTimestamp; self.flags = flags; self.muted = muted; self.muteConfig = muteConfig
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        joinTimestamp = try? c.decodeIfPresent(String.self, forKey: .joinTimestamp)
+        flags = try? c.decodeIfPresent(Int.self, forKey: .flags)
+        muted = try? c.decodeIfPresent(Bool.self, forKey: .muted)
+        muteConfig = try? c.decodeIfPresent(MuteConfig.self, forKey: .muteConfig)
+    }
 }
 
 nonisolated struct ForumTag: Codable, Hashable, Sendable, Identifiable {
