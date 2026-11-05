@@ -1,0 +1,11 @@
+{
+  "build": "202611050134",
+  "build_id": "45596dcd-1dd4-4888-aeaf-01a66e3fc0b2",
+  "processing_state": "VALID",
+  "internal_state": "IN_BETA_TESTING",
+  "existing_internal_group_count": 2,
+  "notes_match": true,
+  "source_manifest_matches": true,
+  "upload_exit": 0,
+  "share_exit": 0
+}

@@ -1,0 +1,17 @@
+{
+  "artifacts": [
+    {
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611050134",
+      "codesign_verify_exit": 0
+    },
+    {
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611050134",
+      "codesign_verify_exit": 0
+    }
+  ],
+  "source_manifest_matches": true
+}
