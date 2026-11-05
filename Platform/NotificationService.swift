@@ -337,12 +337,20 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         [.banner, .list, .sound]
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    /// UIKit's completion handler must be called on the main thread; calling
+    /// it from a concurrency pool thread aborts the app. An `async` witness
+    /// here would have its Objective-C thunk call it wherever the body ends,
+    /// so the response is handled and completed on the main actor instead.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let request = response.notification.request
         let text = response.actionIdentifier == MessageAlertAction.reply ? (response as? UNTextInputNotificationResponse)?.userText : nil
         let value = NotificationActionResponse(actionIdentifier: response.actionIdentifier, identifier: request.identifier,
                                                userInfo: request.content.userInfo, text: text)
-        // Awaited: the action's readiness wait is bounded by the app.
-        await handle(value)
+        Task { @MainActor in
+            // Awaited: the action's readiness wait is bounded by the app.
+            await handle(value)
+            completionHandler()
+        }
     }
 }
