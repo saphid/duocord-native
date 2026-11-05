@@ -1132,3 +1132,53 @@ final class NotificationAlertActionTests: XCTestCase {
         XCTAssertEqual(response(UNNotificationDefaultActionIdentifier, text: "hi").action, .open)
     }
 }
+
+/// UIKit hands `didReceive` a completion block that must be called on the main
+/// thread; calling it from a concurrency pool thread aborts the app (TestFlight
+/// 202611030014: SIGABRT in the `@objc` thunk of
+/// `NotificationService.userNotificationCenter(_:didReceive:)`). This sends the
+/// Objective-C selector as UIKit does, so the compiler-generated thunk runs,
+/// rather than calling `handle(_:)` directly.
+@MainActor
+final class NotificationDelegateDeliveryTests: XCTestCase {
+    nonisolated private final class CompletionProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var threads: [Bool] = []
+        func record() { lock.lock(); threads.append(Thread.isMainThread); lock.unlock() }
+        var onMain: [Bool] { lock.lock(); defer { lock.unlock() }; return threads }
+    }
+
+    /// Neither type has a public initializer; these are the system's own factories.
+    private func systemResponse(_ action: String, message: Snowflake) throws -> UNNotificationResponse {
+        let content = UNMutableNotificationContent()
+        content.userInfo = ["channel": MockDiscord.generalChannel.description, "message": message.description]
+        let request = UNNotificationRequest(identifier: "msg-\(message)", content: content, trigger: nil)
+        let notification = try XCTUnwrap((UNNotification.self as AnyObject)
+            .perform(NSSelectorFromString("notificationWithRequest:date:"), with: request, with: Date())?
+            .takeUnretainedValue() as? UNNotification, "UNNotification factory unavailable")
+        return try XCTUnwrap((UNNotificationResponse.self as AnyObject)
+            .perform(NSSelectorFromString("responseWithNotification:actionIdentifier:"), with: notification, with: action)?
+            .takeUnretainedValue() as? UNNotificationResponse, "UNNotificationResponse factory unavailable")
+    }
+
+    func testSystemDeliveredResponsesCompleteOnMainThreadAndOpenTappedMessage() async throws {
+        let service = NotificationService(delivery: FakeReadNotificationDelivery(), authorized: true, loadAttachment: { _ in nil })
+        var opened: [Snowflake] = []
+        service.onOpen = { _, message in opened.append(message) }
+        let delegate: UNUserNotificationCenterDelegate = service
+        let probe = CompletionProbe()
+        let deliveries: [(String, Snowflake)] = [(UNNotificationDefaultActionIdentifier, 60), (MessageAlertAction.markRead, 61)]
+        for (action, message) in deliveries {
+            let response = try systemResponse(action, message: message)
+            let completed = expectation(description: action)
+            delegate.userNotificationCenter?(.current(), didReceive: response, withCompletionHandler: { @Sendable in
+                probe.record()
+                completed.fulfill()
+            })
+            await fulfillment(of: [completed], timeout: 5)
+        }
+        service.flushPendingTap()
+        XCTAssertEqual(probe.onMain, [true, true], "UIKit aborts when this completion runs off the main thread")
+        XCTAssertEqual(opened, [60], "Only the default action opens, at the tapped message")
+    }
+}
