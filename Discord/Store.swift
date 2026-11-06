@@ -51,8 +51,8 @@ final class DiscordStore {
     private(set) var channels: [Snowflake: Channel] = [:] {
         didSet { channelIndexValid = false; threadIndexCache = [:]; derivedRevision &+= 1 }
     }
-    /// Bumped when anything badges or sections depend on changes.
-    @ObservationIgnored private var derivedRevision = 0
+    /// Cached reads must observe invalidation too, including permission changes.
+    private var derivedRevision = 0
     @ObservationIgnored private var channelIndexValid = false
     @ObservationIgnored private(set) var channelRevision = 0
     @ObservationIgnored private var channelRevisions: [Snowflake: Int] = [:]
