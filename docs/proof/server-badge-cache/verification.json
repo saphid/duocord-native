@@ -1,0 +1,29 @@
+{
+  "base": "665ab9ff72dd14821347ee64db7411747ab00dc1",
+  "production_inputs": 84,
+  "production_manifest_sha256": "93d34b2ac4954db9d770d988d89ba6181e777d4b92ae75aa6d56fab62ff8cc0c",
+  "regression_before": {
+    "tests": 4,
+    "passed": 0,
+    "failed": 4,
+    "exit": 65
+  },
+  "focused_after": {
+    "tests": 102,
+    "passed": 102,
+    "failed": 0,
+    "skipped": 0,
+    "exit": 0
+  },
+  "suites": [
+    "ServerBadgeObservationTests",
+    "SidebarThreadUnreadTests",
+    "ReadStateTests",
+    "NotificationSettingsTests"
+  ],
+  "review": "Earlier independent Claude Opus 5.5/high review of unchanged implementation completed with no actionable findings. Fresh review of release checkout attempted; provider rate-limited before review.",
+  "limits": [
+    "Manual Device panel proof unavailable: newly created simulator not found after discovery refresh.",
+    "No live Discord account or physical Duo verification."
+  ]
+}
