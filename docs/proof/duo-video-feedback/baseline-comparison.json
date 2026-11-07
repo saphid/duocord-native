@@ -16,5 +16,7 @@
     "DuoLayoutTests/testHiddenSidebarRevealAndTitleSurviveScrolling()",
     "DuoLayoutTests/testHidingSidebarAfterScrollingKeepsReveal()",
     "DuoLayoutTests/testSidebarFooterSitsJustAboveHomeIndicator()"
-  ]
+  ],
+  "identical_all_assertion_messages": true,
+  "assertion_failure_count": 11
 }

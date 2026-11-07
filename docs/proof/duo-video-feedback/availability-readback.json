@@ -1,0 +1,18 @@
+{
+  "verified_at": "2026-11-07T05:22:38.779021+00:00",
+  "build": "202611070517",
+  "build_id": "8ce32e52-78cd-460e-ac69-b0f262050f46",
+  "processing_state": "VALID",
+  "internal_state": "IN_BETA_TESTING",
+  "groups": [
+    "Alex",
+    "t3crew",
+    "DuoCrew"
+  ],
+  "release_notes_match": true,
+  "frozen_source_inputs_verified": 84,
+  "ipa_and_archive_executables_unchanged": true,
+  "archive_export_exit": 0,
+  "upload_exit": 0,
+  "share_exit": 0
+}

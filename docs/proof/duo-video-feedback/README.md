@@ -29,3 +29,11 @@ The regression mounts the real RootView and message controller, delivers the UIS
 - 72–77s, scroll from the right-edge strip: the native reader-lifecycle snap-back is fixed and tested at the delegate seam. Physical bar routing and the actual gesture remain unverified.
 
 The broad video task remains open in [#32](https://github.com/saphid/duocord-native/issues/32). This is a bounded scrolling release, not a claim that every demonstrated UI issue has been resolved.
+
+## Released
+
+Duocord Native **1.0 (202611070517)** is available to the existing internal TestFlight groups **Alex**, **t3crew** and **DuoCrew**. Independent Apple readback at 2026-11-07T05:22:38Z confirms **VALID / IN_BETA_TESTING**, exact release notes and group assignment. Archive/export, upload and sharing all exited 0; app and extension signatures, bundle/build/team identities, distribution provisioning and all 84 frozen source hashes passed verification. The uploaded IPA and archived executables remained unchanged.
+
+Merged [#33](https://github.com/saphid/duocord-native/pull/33) as [33f1bae](https://github.com/saphid/duocord-native/commit/33f1baefdf2500da9394ec64b1dcc3940d1df39a). Released source is tagged [testflight/202611070517](https://github.com/saphid/duocord-native/tree/testflight%2F202611070517). Manifest SHA-256: `b6f6fd5fabf563c710c92a939b9371251c5c569f8c70fba5b70837094eb3629b`.
+
+See [availability readback](availability-readback.json), [signed artifact checks](archive-verification.json) and [release source](release-source.json). The source-review and UI-verification limits above remain. No live Discord writes, new tester invitations, public beta links or production App Store submission occurred.

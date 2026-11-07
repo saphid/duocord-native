@@ -1,0 +1,48 @@
+{
+  "source_inputs_verified": 84,
+  "manifest_sha256": "b6f6fd5fabf563c710c92a939b9371251c5c569f8c70fba5b70837094eb3629b",
+  "ipa_sha256": "7b56221952ed35b2ea79dee28ea2df32e1bf9e55e0c24b08d30097fa5fed4a95",
+  "products": [
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611070517",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "executable_sha256": "a49d87fa1f70d961be650f515ae222a117370978f454fff936d3ae9cd42d8e5e"
+    },
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611070517",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "executable_sha256": "a1f6abbb47f258a82409eb8481d4379a2c0636619497748e1636b32135c1bcb3"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611070517",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "executable_sha256": "d68b75dea3c2944b7c79f6ed44610dd46a799c209aaf15f67b00d8334f0d0adc"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611070517",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "executable_sha256": "ec7ef38dc6d720380183b6eae53aaa6d9759af5a3413a6d3d3423474b0cc25ea"
+    }
+  ],
+  "owned_derived_data_removed": true
+}
