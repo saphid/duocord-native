@@ -7,6 +7,7 @@ nonisolated private final class RepairWire: URLProtocol, @unchecked Sendable {
         var body: String
         var status = 200
         var held = false
+        var error: URLError?
     }
     struct Record {
         var request: URLRequest
@@ -47,6 +48,7 @@ nonisolated private final class RepairWire: URLProtocol, @unchecked Sendable {
         if let stub { deliver(stub) }
     }
     func deliver(_ stub: Stub) {
+        if let error = stub.error { client?.urlProtocol(self, didFailWithError: error); return }
         let response = HTTPURLResponse(url: request.url!, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(stub.body.utf8))
@@ -634,8 +636,8 @@ final class PinMessageTests: XCTestCase {
         do {
             try await refused.setPinned(channel: 42, message: 77, pinned: true)
             XCTFail("refused pin succeeded")
-        } catch DiscordError.http(let code, let message) {
-            XCTAssertEqual(code, 403); XCTAssertEqual(message, "Missing Permissions")
+        } catch DiscordError.api(let status, let code, let message) {
+            XCTAssertEqual(status, 403); XCTAssertEqual(code, 50013); XCTAssertEqual(message, "Missing Permissions")
         }
         XCTAssertEqual(RepairWire.captured().count, 1)
         let limited = wire([.init(body: #"{"retry_after":0.01,"global":false}"#, status: 429), .init(body: "", status: 204)])
@@ -1224,5 +1226,154 @@ extension PinMessageTests {
             XCTAssertNil(model.toast, "the obsolete response cannot show an error in the new epoch")
             XCTAssertFalse(timeline.isChangingPin(101))
         }
+    }
+}
+
+/// Real REST failures over an offline URLProtocol: no Discord account actions.
+final class DiscordFailureTests: XCTestCase {
+    private func rest(status: Int, body: String) -> DiscordREST {
+        RepairWire.reset([.init(body: body, status: status)])
+        return DiscordREST(credentials: SessionCredentials(token: "synthetic-offline-token", superProperties: nil, userAgent: "FailureTests"),
+                           protocolClasses: [RepairWire.self])
+    }
+
+    func testPermissionFailuresGiveConservativeActionableFeedback() async throws {
+        let cases = [
+            (50001, "You don't have access to this resource. Check your server or channel access."),
+            (50013, "Discord denied this action because you don't have the required permissions. Check your server or channel permissions."),
+            (50007, "Discord couldn't deliver a message to this person. Their privacy settings or your relationship may prevent messages."),
+        ]
+        for (code, expected) in cases {
+            let api = rest(status: 403, body: "{\"code\":\(code),\"message\":\"Server refusal\"}")
+            do {
+                _ = try await api.send(channel: 42, content: "offline", replyTo: nil, pingReply: false, attachments: [], nonce: "failure-test")
+                XCTFail("refused send succeeded")
+            } catch {
+                XCTAssertEqual(error.localizedDescription, expected, "Discord code \(code)")
+                XCTAssertFalse(DiscordError.mayHaveApplied(error), "a refusal must not be treated as an uncertain write")
+            }
+            XCTAssertEqual(RepairWire.captured().count, 1, "a refused send must not be retried")
+        }
+    }
+
+    private func sendFailure(status: Int, body: String) async throws -> DiscordError {
+        let api = rest(status: status, body: body)
+        do {
+            _ = try await api.send(channel: 42, content: "offline", replyTo: nil, pingReply: false, attachments: [], nonce: "failure-test")
+            XCTFail("refused send succeeded")
+            throw URLError(.unknown)
+        } catch let error as DiscordError {
+            XCTAssertEqual(RepairWire.captured().count, 1, "a failed write must not be retried")
+            return error
+        }
+    }
+
+    func testKnownCodesKeepStatusRawMessageAndNamedReason() async throws {
+        let reasons: [DiscordFailureReason] = [.missingAccess, .missingPermissions, .cannotMessageUser, .unknownChannel, .unknownMessage]
+        for reason in reasons {
+            let status = reason == .unknownChannel || reason == .unknownMessage ? 404 : 403
+            let error = try await sendFailure(status: status, body: "{\"code\":\(reason.rawValue),\"message\":\"original refusal\"}")
+            guard case .api(let actualStatus, let code, let message) = error else { return XCTFail("lost Discord code") }
+            XCTAssertEqual(actualStatus, status)
+            XCTAssertEqual(code, reason.rawValue)
+            XCTAssertEqual(message, "original refusal")
+            XCTAssertEqual(error.failureReason, reason)
+            XCTAssertEqual(error.httpStatus, status)
+            XCTAssertFalse(DiscordError.mayHaveApplied(error))
+        }
+    }
+
+    func testUnknownCodesAndMalformedFieldsRemainUseful() async throws {
+        for code in [0, 99999, -1] {
+            let error = try await sendFailure(status: 400, body: "{\"code\":\(code),\"message\":\"new server refusal\"}")
+            guard case .api(400, let actualCode, let message) = error else { return XCTFail("unknown code discarded") }
+            XCTAssertEqual(actualCode, code)
+            XCTAssertEqual(message, "new server refusal")
+            XCTAssertNil(error.failureReason)
+            XCTAssertEqual(error.localizedDescription, "Discord returned 400 (code \(code)): new server refusal")
+            XCTAssertFalse(DiscordError.mayHaveApplied(error))
+        }
+        for body in [#"{"code":"50013","message":"useful refusal"}"#, #"{"code":{},"message":"useful refusal"}"#,
+                     #"{"message":"useful refusal"}"#] {
+            let error = try await sendFailure(status: 403, body: body)
+            guard case .http(403, let message) = error else { return XCTFail("malformed code must remain an uncoded HTTP refusal") }
+            XCTAssertEqual(message, "useful refusal")
+            XCTAssertNil(error.failureReason)
+        }
+        for body in ["not JSON", "[]", #"{"message":null}"#, #"{"message":{}}"#] {
+            let error = try await sendFailure(status: 502, body: body)
+            guard case .http(502, let message) = error else { return XCTFail("malformed payload lost HTTP status") }
+            XCTAssertEqual(message, HTTPURLResponse.localizedString(forStatusCode: 502))
+            XCTAssertTrue(DiscordError.mayHaveApplied(error))
+        }
+        let error = try await sendFailure(status: 403, body: #"{"code":50013,"message":{}}"#)
+        guard case .api(403, 50013, let message) = error else { return XCTFail("a malformed message must not discard a valid code") }
+        XCTAssertEqual(message, HTTPURLResponse.localizedString(forStatusCode: 403))
+        XCTAssertEqual(error.failureReason, .missingPermissions)
+    }
+
+    func testServerErrorsNeverClaimADefinitePermissionRefusal() async throws {
+        let error = try await sendFailure(status: 503, body: #"{"code":50013,"message":"server unavailable"}"#)
+        XCTAssertNil(error.failureReason)
+        XCTAssertEqual(error.localizedDescription, "Discord returned 503 (code 50013): server unavailable")
+        XCTAssertTrue(DiscordError.mayHaveApplied(error), "a server error can follow an applied write")
+    }
+
+    func testSignOutStillOverridesTheBodyCode() async throws {
+        let error = try await sendFailure(status: 401, body: #"{"code":50013,"message":"Missing Permissions"}"#)
+        guard case .unauthorized = error else { return XCTFail("401 must end the session") }
+        XCTAssertFalse(DiscordError.mayHaveApplied(error))
+    }
+
+    func testLostResponsesRemainUncertainAndAreNeverRetried() async throws {
+        for code: URLError.Code in [.timedOut, .networkConnectionLost, .notConnectedToInternet] {
+            let api = rest(status: 200, body: "")
+            RepairWire.reset([.init(body: "", error: URLError(code))])
+            do {
+                _ = try await api.send(channel: 42, content: "offline", replyTo: nil, pingReply: false, attachments: [], nonce: "failure-test")
+                XCTFail("transport failure succeeded")
+            } catch {
+                XCTAssertEqual((error as? URLError)?.code, code)
+                XCTAssertEqual(DiscordError.mayHaveApplied(error), code != .notConnectedToInternet)
+            }
+            XCTAssertEqual(RepairWire.captured().count, 1, "an uncertain send must not be retried")
+        }
+    }
+
+    @MainActor
+    func testCodedHistoryRefusalsKeepInboxAccessFeedback() async throws {
+        for (status, code) in [(403, 50001), (404, 10003)] {
+            let api = rest(status: status, body: "{\"code\":\(code),\"message\":\"refusal\"}")
+            let previews = InboxPreviews()
+            let key = InboxPreviews.Key(channel: 42, latest: 100, boundary: 10, session: UUID(), account: 1, api: ObjectIdentifier(api))
+            previews.appear(key, cached: nil, load: { try await InboxPreviews.latestMessage(api: api, channel: 42) }, isCurrent: { true })
+            for _ in 0..<100 where previews.inFlight > 0 { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(previews.entry(for: key), .failed("You can't read this conversation's history."))
+            XCTAssertEqual(RepairWire.captured().count, 1)
+        }
+    }
+
+    @MainActor
+    func testCodedReactionRefusalRollsBackWithoutAnUncertainOutcomeRead() async throws {
+        let api = rest(status: 403, body: #"{"code":50013,"message":"Missing Permissions"}"#)
+        let timeline = MessageTimeline(channelID: 42)
+        timeline.receive(Message(id: 10, channelID: 42, guildID: nil, author: User(id: 1, username: "offline"), content: "fixture", timestamp: ""))
+        let emoji = Emoji(id: nil, name: "👍", animated: false)
+        let pending = try XCTUnwrap(timeline.sendReaction(emoji, on: 10, add: true, api: api))
+        XCTAssertEqual(timeline.messages.first?.reactions.first?.me, true, "shown optimistically")
+        let outcome = await pending.value
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertTrue(timeline.messages.first?.reactions.isEmpty == true, "definite refusal restores the prior reaction")
+        XCTAssertEqual(RepairWire.captured().map { $0.request.httpMethod }, ["PUT"], "neither another write nor an uncertainty read")
+    }
+
+    func testAChannelCodeCannotTriggerTheLegacyPinsRouteEvenWithGenericMessage() async throws {
+        let api = rest(status: 404, body: #"{"code":10003,"message":"404: Not Found"}"#)
+        do {
+            _ = try await api.pinPage(channel: 42, before: nil, limit: 50)
+            XCTFail("unknown channel succeeded")
+        } catch DiscordError.api(404, 10003, _) {
+        }
+        XCTAssertEqual(RepairWire.captured().count, 1, "the numeric code must prevent a false unknown-route fallback")
     }
 }

@@ -369,7 +369,7 @@ final class ThreadSidebarTests: XCTestCase {
             try await api.deleteThread(55)
             XCTFail("expected refusal")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "Discord returned 403: Missing Permissions")
+            XCTAssertEqual(error.localizedDescription, "Discord denied this action because you don't have the required permissions. Check your server or channel permissions.")
         }
     }
 

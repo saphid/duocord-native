@@ -108,8 +108,19 @@ nonisolated struct OutgoingAttachment: Sendable {
     var contentType: String
 }
 
+/// Named server refusals, not permission preflight: gateway state can be stale.
+nonisolated enum DiscordFailureReason: Int, Sendable {
+    case unknownChannel = 10003
+    case unknownMessage = 10008
+    case missingAccess = 50001
+    case cannotMessageUser = 50007
+    case missingPermissions = 50013
+}
+
 nonisolated enum DiscordError: Error, LocalizedError {
     case http(Int, String)
+    /// Preserve both status and Discord's code, including codes not yet known.
+    case api(status: Int, code: Int, message: String)
     case unauthorized
     case decoding(String)
     /// A write Discord rate limited. It is not sent again by itself: you
@@ -119,9 +130,41 @@ nonisolated enum DiscordError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .http(let code, let message): "Discord returned \(code): \(message)"
+        case .api(let status, let code, let message):
+            switch failureReason {
+            case .missingAccess: "You don't have access to this resource. Check your server or channel access."
+            case .missingPermissions: "Discord denied this action because you don't have the required permissions. Check your server or channel permissions."
+            case .cannotMessageUser: "Discord couldn't deliver a message to this person. Their privacy settings or your relationship may prevent messages."
+            case .unknownChannel: "This channel is unavailable. It may have been deleted or you may no longer have access."
+            case .unknownMessage: "This message is unavailable. It may have been deleted."
+            case nil: "Discord returned \(status) (code \(code)): \(message)"
+            }
         case .unauthorized: "Your Discord session ended. Sign in again."
         case .decoding(let detail): "Unexpected response from Discord (\(detail))."
         case .rateLimited(let wait): "You're doing that too fast. Try again in \(max(1, Int(wait.rounded(.up)))) s."
+        }
+    }
+
+    /// HTTP-based callers keep working for coded and uncoded failures alike.
+    var httpStatus: Int? {
+        switch self {
+        case .http(let status, _), .api(let status, _, _): status
+        case .unauthorized: 401
+        case .rateLimited: 429
+        case .decoding: nil
+        }
+    }
+
+    var failureReason: DiscordFailureReason? {
+        guard case .api(let status, let code, _) = self, (400..<500).contains(status) else { return nil }
+        return DiscordFailureReason(rawValue: code)
+    }
+
+    /// Code zero is Discord's generic unknown route, never Unknown Channel.
+    var isUnknownRoute: Bool {
+        switch self {
+        case .http(404, let message), .api(404, 0, let message): message == DiscordREST.unknownRouteMessage
+        default: false
         }
     }
 
@@ -130,7 +173,7 @@ nonisolated enum DiscordError: Error, LocalizedError {
     /// the device did nothing; a lost response or server error might have.
     nonisolated static func mayHaveApplied(_ error: Error) -> Bool {
         switch error {
-        case DiscordError.http(let code, _) where (400..<500).contains(code): return false
+        case let error as DiscordError where error.httpStatus.map({ (400..<500).contains($0) }) == true: return false
         case DiscordError.unauthorized, DiscordError.rateLimited: return false
         case let error as URLError:
             return ![.notConnectedToInternet, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
@@ -281,7 +324,7 @@ actor DiscordREST: DiscordAPI {
         do {
             return try await request("GET", "channels/\(channel)/messages/pins", query: query, body: nil,
                                      route: "pins:\(channel)", strictQuery: true)
-        } catch DiscordError.http(404, let message) where before == nil && message == Self.unknownRouteMessage {
+        } catch let error as DiscordError where before == nil && error.isUnknownRoute {
             log.notice("paged pins route unavailable; using the legacy pins list")
             let legacy: [Message] = try await get("channels/\(channel)/pins", route: "pins:\(channel)")
             return PinPage(items: legacy.map { PinPage.Item(message: $0, pinnedAt: nil) }, hasMore: false)
@@ -598,8 +641,21 @@ actor DiscordREST: DiscordAPI {
                 log.notice("429 on \(route, privacy: .public), waiting \(wait)s")
                 continue
             default:
-                struct Failure: Decodable { var message: String? }
-                let message = (try? decoder.decode(Failure.self, from: data))?.message ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+                // Decode fields independently: a malformed code must not discard
+                // a useful message, nor a malformed message a valid numeric code.
+                struct Failure: Decodable {
+                    var code: Int?
+                    var message: String?
+                    enum CodingKeys: String, CodingKey { case code, message }
+                    init(from decoder: Decoder) throws {
+                        let fields = try decoder.container(keyedBy: CodingKeys.self)
+                        code = try? fields.decode(Int.self, forKey: .code)
+                        message = try? fields.decode(String.self, forKey: .message)
+                    }
+                }
+                let failure = try? decoder.decode(Failure.self, from: data)
+                let message = failure?.message ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
+                if let code = failure?.code { throw DiscordError.api(status: http.statusCode, code: code, message: message) }
                 throw DiscordError.http(http.statusCode, message)
             }
         }

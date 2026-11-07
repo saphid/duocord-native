@@ -383,7 +383,7 @@ final class ThreadNotificationTests: XCTestCase {
             _ = try await client().modifyThreadSettings(55, fields: ["flags": .number(2)])
             XCTFail("expected refusal")
         } catch {
-            XCTAssertEqual(error.localizedDescription, "Discord returned 404: Unknown Member")
+            XCTAssertEqual(error.localizedDescription, "Discord returned 404 (code 10007): Unknown Member")
         }
     }
 }

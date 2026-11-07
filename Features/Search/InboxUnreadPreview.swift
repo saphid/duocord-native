@@ -129,7 +129,7 @@ final class InboxPreviews {
             let newest = rows.filter { Self.accepts($0, for: key) }.max { $0.id < $1.id }
             entries[key] = newest.map(Entry.loaded) ?? .empty
         case .failure(let error as DiscordError):
-            if case .http(let code, _) = error, code == 403 || code == 404 {
+            if error.httpStatus == 403 || error.httpStatus == 404 {
                 entries[key] = .failed("You can't read this conversation's history.")
             } else {
                 entries[key] = .failed(error.localizedDescription)
