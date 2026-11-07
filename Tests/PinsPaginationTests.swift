@@ -198,7 +198,7 @@ final class PinsPaginationTests: XCTestCase {
 
     func testListSurfacesServerAndAuthErrorsWithoutLegacyRequests() async {
         for (stub, expected) in [(status(500, #"{"message":"boom"}"#), "500"), (status(401, "{}"), "session ended"),
-                                 (status(404, #"{"message":"Unknown Channel","code":10003}"#), "Unknown Channel")] {
+                                 (status(404, #"{"message":"Unknown Channel","code":10003}"#), "This channel is unavailable")] {
             PinsWire.reset([stub, status(200, "[]")])
             let owner = OtherListState<String, Message, String>()
             await pins(owner, api: client()).value

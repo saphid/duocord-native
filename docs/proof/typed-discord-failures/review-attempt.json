@@ -1,0 +1,11 @@
+{
+  "task_id": "3d790285-7f1f-4360-8a41-b3fcb4e95860",
+  "provider": "claudeAgent",
+  "model": "claude-opus-5-5",
+  "effort": "high",
+  "final_status": "failed",
+  "reason": "Claude API rate limit reached before review",
+  "source_review_occurred": false,
+  "diff_sha256": "c5b3614bfd7d9e3fe2a4e46c65bca2a616b74a58f25b51a59f99cbf7fc0fea6b",
+  "coding_standards": "No CODING_STANDARDS.md found in changed paths, worktree or primary repository"
+}

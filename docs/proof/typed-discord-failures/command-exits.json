@@ -1,0 +1,14 @@
+{
+  "red": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "focused": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "green": {
+    "exit": 0,
+    "owned_run_root_removed": true
+  }
+}
