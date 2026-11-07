@@ -93,6 +93,31 @@ final class DuoLayoutTests: XCTestCase {
 
     // MARK: Channel rows at larger text (iPad)
 
+    /// A native sidebar bar reserves the window-controls area. The rail's
+    /// first button must start below that bar, including in a resized window.
+    func testIPadSidebarKeepsHomeBelowNativeHeader() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        let (model, window) = try host(size: wide)
+        model.columnVisibility = .all
+        settle()
+        let bar = try XCTUnwrap(views(UINavigationBar.self, in: window).first {
+            !$0.isHidden && $0.alpha > 0.01 && $0.bounds.height > 0 &&
+            $0.convert($0.bounds, to: window).midX < window.bounds.midX
+        }, "The iPad sidebar needs its own system-managed navigation bar")
+        XCTAssertEqual(bar.topItem?.title, model.store.guilds[model.selectedGuild!]?.name)
+        let rail = try XCTUnwrap(views(UIScrollView.self, in: window).first {
+            abs($0.bounds.width - 72) < 1 && !$0.isHidden
+        })
+        // Scroll views extend behind translucent bars. Their content origin,
+        // after the system's adjusted inset, is where the first rail item starts.
+        XCTAssertGreaterThanOrEqual(rail.convert(CGPoint.zero, to: window).y,
+                                    bar.convert(bar.bounds, to: window).maxY,
+                                    "The server rail must remain below the native header/window-controls area")
+        model.openFromRail(guild: nil)
+        settle()
+        XCTAssertEqual(bar.topItem?.title, "Direct Messages", "The header follows rail navigation")
+    }
+
     /// One size above the default (a tester's setting) and an accessibility
     /// size: the real channel list (mock server) keeps a 44 pt touch pitch on
     /// iPad, and a name keeps room above and below instead of filling its row.

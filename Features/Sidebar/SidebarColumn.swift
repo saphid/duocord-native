@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarColumn: View {
     @Environment(AppModel.self) private var model
     @Environment(FoldState.self) private var fold
+    var showsNativeHeader = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -24,9 +25,9 @@ struct SidebarColumn: View {
                     MemberListView(showsHeader: true)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 } else if model.isHome {
-                    DirectMessageList()
+                    DirectMessageList(showsHeader: !showsNativeHeader)
                 } else if let guild = model.selectedGuild {
-                    ChannelList(guildID: guild)
+                    ChannelList(guildID: guild, showsHeader: !showsNativeHeader)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -348,6 +349,7 @@ struct ChannelList: View {
     @Environment(AppModel.self) private var model
     @Environment(DiscordStore.self) private var store
     let guildID: Snowflake
+    var showsHeader = true
     @State private var collapsed: Set<Snowflake> = []
     /// Parents whose full thread list is shown, beyond the most recent few.
     @State private var expandedThreads: Set<Snowflake> = []
@@ -397,7 +399,7 @@ struct ChannelList: View {
                     }
                 }
             } header: {
-                GuildHeader(guild: guild)
+                if showsHeader { GuildHeader(guild: guild) }
             }
         }
         .listStyle(.plain)
@@ -720,6 +722,7 @@ struct VoiceParticipants: View {
 struct DirectMessageList: View {
     @Environment(AppModel.self) private var model
     @Environment(DiscordStore.self) private var store
+    var showsHeader = true
 
     var body: some View {
         List(selection: Binding(get: { model.selectedChannel }, set: { model.select(channel: $0) })) {
@@ -734,13 +737,15 @@ struct DirectMessageList: View {
                         .tag(channel.id)
                 }
             } header: {
-                Text("Direct Messages")
-                    .font(.headline)
-                    .foregroundStyle(Color.textPrimary)
-                    .textCase(nil)
-                    .padding(.vertical, 10)
-                    .padding(.leading, 12)
-                    .accessibilityAddTraits(.isHeader)
+                if showsHeader {
+                    Text("Direct Messages")
+                        .font(.headline)
+                        .foregroundStyle(Color.textPrimary)
+                        .textCase(nil)
+                        .padding(.vertical, 10)
+                        .padding(.leading, 12)
+                        .accessibilityAddTraits(.isHeader)
+                }
             }
         }
         .listStyle(.plain)

@@ -50,13 +50,30 @@ struct MainView: View {
     private var splitView: some View {
         @Bindable var model = model
         return NavigationSplitView(columnVisibility: $model.columnVisibility) {
-            SidebarColumn()
+            SidebarColumn(showsNativeHeader: usesNativeSidebarHeader)
                 .navigationSplitViewColumnWidth(min: sidebarWidth, ideal: sidebarWidth, max: sidebarWidth)
-                .toolbar(.hidden, for: .navigationBar)
+                // iPad's window controls reserve space in the native bar. Hiding
+                // it lets the server rail's Home button occupy that same area.
+                .navigationTitle(usesNativeSidebarHeader ? sidebarTitle : "")
+                .navigationSubtitle(usesNativeSidebarHeader ? sidebarSubtitle : "")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(usesNativeSidebarHeader ? .visible : .hidden, for: .navigationBar)
         } detail: {
             DetailColumn()
         }
         .navigationSplitViewStyle(.balanced)
+    }
+
+    private var usesNativeSidebarHeader: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+
+    private var sidebarTitle: String {
+        model.selectedGuild.flatMap { model.store.guilds[$0]?.name } ?? "Direct Messages"
+    }
+
+    private var sidebarSubtitle: String {
+        guard let guild = model.selectedGuild.flatMap({ model.store.guilds[$0] }),
+              let count = guild.memberCount else { return "" }
+        return "\(count.formatted()) members"
     }
 
     private var detailHasDeck: Bool {
