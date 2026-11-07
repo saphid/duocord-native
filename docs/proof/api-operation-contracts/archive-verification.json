@@ -1,0 +1,53 @@
+{
+  "source_inputs_verified": 89,
+  "source_commit": "7de9f4896caf193d08a632708f1503382fc0e91f",
+  "manifest_sha256": "32246336daf69637599faa48a86bb1f79af6568fb284f53cf823aa2eef154641",
+  "ipa_sha256": "10dece51ac2b8f6d74a63a5ae1c2ebf772d16ea29a7129dece6444519ef941f7",
+  "products": [
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611071106",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "profile_matches_bundle": true,
+      "executable_sha256": "4e2f3acac0361f4c0d106e0c29297a88e072a36c87e93d362c57cf1d02fbd4d1"
+    },
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611071106",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "profile_matches_bundle": true,
+      "executable_sha256": "b22a98f2d0bf086831b0843b7a8d3ccf1ad844ac4409145864f4d7e9fce82bff"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611071106",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "profile_matches_bundle": true,
+      "executable_sha256": "312dafdf3c60bae53f45209de7ab5f29567d3c7369bfc9cc081400cc354be7d5"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611071106",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "profile_matches_bundle": true,
+      "executable_sha256": "3d78f529bb5006aa8ecd011e5e640cf64675397878471a3059e70a9a776c98f7"
+    }
+  ],
+  "owned_derived_data_removed": true
+}

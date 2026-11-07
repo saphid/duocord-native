@@ -1,0 +1,9 @@
+{
+  "build": "202611071106",
+  "base": "edcdd730af6fc47c8022ec1ff3d9574b24e8ce45",
+  "manifest_sha256": "32246336daf69637599faa48a86bb1f79af6568fb284f53cf823aa2eef154641",
+  "input_count": 89,
+  "source_commit": "7de9f4896caf193d08a632708f1503382fc0e91f",
+  "release_tag": "testflight/202611071106",
+  "publication": "Exact manifest inputs published with release tag; documentation-only receipts may follow built source commit"
+}

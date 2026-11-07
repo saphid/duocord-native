@@ -1,0 +1,24 @@
+{
+  "checked_utc": "2026-11-07T11:13:06.652277+00:00",
+  "app_id": "6829036831",
+  "build": "202611071106",
+  "build_id": "9fed1290-ee36-403c-9e2a-33e50c03eef4",
+  "processing_state": "VALID",
+  "internal_state": "IN_BETA_TESTING",
+  "groups": [
+    {
+      "id": "f3217a3b-fcc8-44f4-b888-2ba4ae058b6a",
+      "name": "Alex"
+    },
+    {
+      "id": "1bb1f712-b8a4-4776-be6d-2a41d0f6274e",
+      "name": "t3crew"
+    },
+    {
+      "id": "a4263d3a-a78d-41d0-a651-a602bbc27220",
+      "name": "DuoCrew"
+    }
+  ],
+  "exact_notes_match": true,
+  "only_existing_internal_groups": true
+}

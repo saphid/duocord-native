@@ -1,0 +1,26 @@
+{
+  "task_id": "8dbb1221-4bdc-4835-997c-48926a025634",
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "reasoning": "high",
+  "status": "completed",
+  "platform": "iPhone 17 Pro / iOS 27.2 Simulator",
+  "offline_mock": true,
+  "verified": [
+    "ordinary send clears draft",
+    "exactly one settled visible matching mock row",
+    "keyboard/composer usable",
+    "missing Send Messages in Threads keeps nonempty Send disabled",
+    "refresh failure preserves draft"
+  ],
+  "not_visually_verified": [
+    "delivery unknown and Check Delivery",
+    "successful capability refresh",
+    "physical or foldable behaviors"
+  ],
+  "source_and_binary_unchanged": true,
+  "images": {
+    "03-sent-cleared.png": "0a7cdd1230d30ceb343b2d593d00d1afaea31477ad95d72a9dd06b96d17430c3",
+    "05-thread-send-disabled.png": "bef8793b4826455b18edda3f57e4aff798434adc887b3021a84ddd6235f572c8"
+  }
+}
