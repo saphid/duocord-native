@@ -748,6 +748,29 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
         updateNearBottom()
     }
 
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        // A system bar can initiate scrolling outside this view. Honour the
+        // delegate lifecycle before an offset/layout callback can reapply the
+        // latest-message pin, even when isTracking hasn't changed on the list.
+        pinned = false
+        host?.listReaderMoved()
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { finishReaderScroll() }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        finishReaderScroll()
+    }
+
+    private func finishReaderScroll() {
+        pinned = isNearBottom()
+        markResting()
+        updateNearBottom()
+        saveAnchor()
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if keepTopOnResize(scrollView) { return }
         if scrollView.isTracking || scrollView.isDecelerating {
@@ -807,9 +830,6 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
         markResting()
         return true
     }
-
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { saveAnchor() }
-    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { saveAnchor() } }
 
     private func saveAnchor() { if let anchor = captureAnchor() { host?.list(saveAnchor: anchor) } }
 
