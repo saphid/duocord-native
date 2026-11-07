@@ -780,6 +780,11 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     }
     var threadOperations: [ThreadRecord] { lock.withLock { threadRecords } }
     #if DEBUG
+    private var threadHook: (@Sendable (ThreadRecord) async throws -> Void)?
+    var beforeThreadWrite: (@Sendable (ThreadRecord) async throws -> Void)? {
+        get { lock.withLock { threadHook } }
+        set { lock.withLock { threadHook = newValue } }
+    }
     private var threadFailure = false
     var failNextThreadWrite: Bool {
         get { lock.withLock { threadFailure } }
@@ -833,6 +838,9 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
     private func performThread(_ record: ThreadRecord) async throws {
         try await Task.sleep(for: .milliseconds(150))
         lock.withLock { threadRecords.append(record) }
+        #if DEBUG
+        if let hook = lock.withLock({ threadHook }) { try await hook(record) }
+        #endif
         // `-DuocordMockThreadFail YES`: every thread write fails (error toasts).
         try failIfAsked("DuocordMockThreadFail")
         #if DEBUG

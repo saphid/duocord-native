@@ -877,12 +877,11 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
             guard let self else { return nil }
             var actions: [UIMenuElement] = []
             let sendState = self.timeline.sendState(for: message)
-            if case .failed = sendState {
-                // A send that didn't go: try again, or drop it (local only).
-                actions.append(UIAction(title: "Retry Send", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+            if let recoveryTitle = sendState?.recoveryTitle {
+                actions.append(UIAction(title: recoveryTitle, image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                     self?.host?.list(retry: message)
                 })
-                actions.append(UIAction(title: "Delete Message", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                actions.append(UIAction(title: "Remove Local Echo", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                     self?.host?.list(discard: message)
                 })
             }

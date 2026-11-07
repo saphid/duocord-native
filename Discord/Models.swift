@@ -89,11 +89,16 @@ nonisolated struct Member: Codable, Hashable, Sendable {
     var userID: Snowflake?
     var nick: String?
     var roles: [Snowflake]
+    var rolesKnown = true
     var avatar: String?
+    /// Raw ISO-8601 preserves invalid dates as uncertainty, rather than silently
+    /// interpreting malformed timeout metadata as permission to write.
+    var communicationDisabledUntil: String?
 
     enum CodingKeys: String, CodingKey {
         case user, nick, roles, avatar
         case userID = "user_id"
+        case communicationDisabledUntil = "communication_disabled_until"
     }
 
     init(from decoder: Decoder) throws {
@@ -101,8 +106,20 @@ nonisolated struct Member: Codable, Hashable, Sendable {
         user = try c.decodeIfPresent(User.self, forKey: .user)
         userID = try c.decodeIfPresent(Snowflake.self, forKey: .userID) ?? user?.id
         nick = try c.decodeIfPresent(String.self, forKey: .nick)
+        rolesKnown = try c.contains(.roles) && !c.decodeNil(forKey: .roles)
         roles = try c.decodeIfPresent([Snowflake].self, forKey: .roles) ?? []
         avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        communicationDisabledUntil = try c.decodeIfPresent(String.self, forKey: .communicationDisabledUntil)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(user, forKey: .user)
+        try c.encodeIfPresent(userID, forKey: .userID)
+        try c.encodeIfPresent(nick, forKey: .nick)
+        if rolesKnown { try c.encode(roles, forKey: .roles) }
+        try c.encodeIfPresent(avatar, forKey: .avatar)
+        try c.encodeIfPresent(communicationDisabledUntil, forKey: .communicationDisabledUntil)
     }
 
     init(user: User?, nick: String?, roles: [Snowflake]) {

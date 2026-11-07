@@ -1098,6 +1098,7 @@ final class OwnMessageTests: XCTestCase {
     func testEditModeRestoresDraftAndReportsFailure() async {
         let model = AppModel()
         model.store.apply(ready: MockDiscord().readyPayload())
+        model.store.upsert(channel: Channel(id: 1, type: .dm))
         let mine = Message(id: 20, channelID: 1, guildID: nil, author: me, content: "original", timestamp: "")
         model.timeline(for: 1).receive(mine)
         model.drafts[1] = Draft(text: "half-written")
@@ -1113,20 +1114,22 @@ final class OwnMessageTests: XCTestCase {
         XCTAssertEqual(model.drafts[1], Draft(text: "half-written"), "Save leaves edit mode at once")
         XCTAssertEqual(model.timeline(for: 1).messages.first?.content, "changed")
         await eventually { model.toast != nil }
-        XCTAssertEqual(model.toast?.text, "Couldn't edit message")
+        XCTAssertEqual(model.toast?.text, "Your Discord session ended. Sign in again.")
         XCTAssertEqual(model.timeline(for: 1).messages.first?.content, "original")
     }
 
     /// A reaction Discord refused doesn't join Recently Used, and says so.
     func testFailedReactionNotRecent() async {
         let model = AppModel()
+        model.store.apply(ready: MockDiscord().readyPayload())
+        model.store.upsert(channel: Channel(id: 2, type: .dm))
         let message = Message(id: 30, channelID: 2, guildID: nil, author: me, content: "x", timestamp: "")
         model.timeline(for: 2).receive(message)
         let rare = Emoji(id: nil, name: "🦑", animated: false)
         let before = model.settings.recentEmoji
         model.react(rare, add: true, message: 30, channel: 2)
         await eventually { model.toast != nil }
-        XCTAssertEqual(model.toast?.text, "Couldn't add reaction")
+        XCTAssertEqual(model.toast?.text, "Your Discord session ended. Sign in again.")
         XCTAssertEqual(model.settings.recentEmoji, before)
         XCTAssertNil(model.timeline(for: 2).messages.first?.reactions.first, "and the pill went back")
     }

@@ -103,7 +103,10 @@ final class PinsPaginationTests: XCTestCase {
     private func pins(_ owner: OtherListState<String, Message, String>, input: String = "pins", api: DiscordAPI? = nil,
                       store: DiscordStore? = nil, fetch: (@MainActor (String?) async throws -> PinPage)? = nil,
                       current: @escaping @MainActor () -> Bool = { true }) -> Task<Void, Never> {
-        OtherListConsumers.pins(owner, input: input, api: api ?? OfflineAPI(), channel: channel, store: store ?? DiscordStore(),
+        let known = store ?? DiscordStore()
+        if known.me == nil { known.apply(ready: MockDiscord().readyPayload()) }
+        if known.channel(channel) == nil { known.upsert(channel: Channel(id: channel, type: .dm)) }
+        return OtherListConsumers.pins(owner, input: input, api: api ?? OfflineAPI(), channel: channel, store: known,
                                 isCurrent: current, fetch: fetch)
     }
 
@@ -284,6 +287,7 @@ final class PinsPaginationTests: XCTestCase {
 
     func testStaleSecondPageIsIgnoredAfterPinsRevisionChange() async throws {
         let model = AppModel(), store = DiscordStore(), api = MockDiscord()
+        store.apply(ready: api.readyPayload()); store.upsert(channel: Channel(id: channel, type: .dm))
         model.selectedGuild = 10; model.selectedChannel = channel
         let presentation = UUID()
         func identity() -> PinsListIdentity {
@@ -362,7 +366,8 @@ final class PinsPaginationTests: XCTestCase {
         let all = try await mock.pins(channel: chat)
         XCTAssertGreaterThan(all.count, 100)
         let owner = OtherListState<String, Message, String>()
-        await OtherListConsumers.pins(owner, input: "mock", api: mock, channel: chat, store: DiscordStore(), isCurrent: { true }).value
+        let store = DiscordStore(); store.apply(ready: mock.readyPayload())
+        await OtherListConsumers.pins(owner, input: "mock", api: mock, channel: chat, store: store, isCurrent: { true }).value
         XCTAssertEqual(owner.snapshot(for: "mock").rows.count, 50)
         while let more = owner.loadMore("mock") { await more.value }
         XCTAssertEqual(owner.snapshot(for: "mock").rows.map(\.id), all.map(\.id))

@@ -240,7 +240,7 @@ struct MessageBuilder {
         hasher.combine(message.embeds.count)
         hasher.combine(message.attachments.count)
         hasher.combine(continuation)
-        hasher.combine(sendState == nil ? 0 : (sendState == .sending ? 1 : 2))
+        hasher.combine(sendState)
         hasher.combine(name)
         hasher.combine(inputs.forwardChannelName)
         hasher.combine(inputs.hidesBlocked)

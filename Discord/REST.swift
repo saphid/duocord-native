@@ -132,7 +132,7 @@ nonisolated enum DiscordError: Error, LocalizedError {
         case .http(let code, let message): "Discord returned \(code): \(message)"
         case .api(let status, let code, let message):
             switch failureReason {
-            case .missingAccess: "You don't have access to this resource. Check your server or channel access."
+            case .missingAccess: "Discord refused access for this action. Refresh eligibility and try again."
             case .missingPermissions: "Discord denied this action because you don't have the required permissions. Check your server or channel permissions."
             case .cannotMessageUser: "Discord couldn't deliver a message to this person. Their privacy settings or your relationship may prevent messages."
             case .unknownChannel: "This channel is unavailable. It may have been deleted or you may no longer have access."
@@ -187,6 +187,10 @@ nonisolated enum DiscordError: Error, LocalizedError {
 /// implementations conform; nothing else talks to the network directly.
 nonisolated protocol DiscordAPI: Sendable {
     func channel(_ id: Snowflake) async throws -> Channel
+    func guild(_ id: Snowflake) async throws -> Guild
+    func guildRoles(_ id: Snowflake) async throws -> [Role]
+    func guildMember(_ user: Snowflake, in guild: Snowflake) async throws -> Member
+    func ownThreadMember(_ thread: Snowflake, account: Snowflake) async throws -> ThreadMemberRef
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message]
     /// The first page of pins only (up to 50). Lists use `pinPage`.
     func pins(channel: Snowflake) async throws -> [Message]
@@ -199,6 +203,7 @@ nonisolated protocol DiscordAPI: Sendable {
     func publicArchivedThreads(channel: Snowflake, before: String?) async throws -> ArchivedThreadPage
     /// `pingReply` is whether a reply mentions the replied-to author (the "@ On/Off" toggle).
     func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String) async throws -> Message
+    func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String, attempt: SendAttempt) async throws -> Message
     /// Replaces the text of one of your messages; returns the edited message.
     func edit(channel: Snowflake, message: Snowflake, content: String) async throws -> Message
     func delete(channel: Snowflake, message: Snowflake) async throws
@@ -231,16 +236,29 @@ extension Emoji {
     /// The reaction key as one URL path segment, encoded the way the web
     /// client's encodeURIComponent does ("👍" → "%F0%9F%91%8D", "name:id" → "name%3Aid").
     nonisolated var reactionPathSegment: String {
-        var unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-        unreserved.insert(charactersIn: "-_.!~*'()")
-        return reactionKey.addingPercentEncoding(withAllowedCharacters: unreserved) ?? reactionKey
+        DiscordRoute.encodeSegment(reactionKey)
     }
 }
 
 extension DiscordAPI {
+    /// Legacy/mock transports cannot report their dispatch boundary, so once
+    /// entered they are conservatively treated as dispatched.
+    func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String, attempt: SendAttempt) async throws -> Message {
+        try await attempt.run {
+            try await attempt.check()
+            attempt.markDispatched()
+            return try await self.send(channel: channel, content: content, replyTo: replyTo, pingReply: pingReply, attachments: attachments, nonce: nonce)
+        }
+    }
+
     func channel(_ id: Snowflake) async throws -> Channel {
         throw DiscordError.decoding("Channel lookup is unavailable for this transport")
     }
+    func guild(_ id: Snowflake) async throws -> Guild { throw DiscordError.decoding("Guild lookup unavailable") }
+    func guildRoles(_ id: Snowflake) async throws -> [Role] { throw DiscordError.decoding("Role lookup unavailable") }
+    func guildMember(_ user: Snowflake, in guild: Snowflake) async throws -> Member { throw DiscordError.decoding("Member lookup unavailable") }
+    func ownThreadMember(_ thread: Snowflake, account: Snowflake) async throws -> ThreadMemberRef { throw DiscordError.decoding("Thread membership lookup unavailable") }
+
     func publicArchivedThreads(channel: Snowflake, before: String?) async throws -> ArchivedThreadPage {
         throw DiscordError.decoding("Public archived-thread paging is unavailable for this transport")
     }
@@ -269,6 +287,7 @@ actor DiscordREST: DiscordAPI {
     private var inFlight: [String: Int] = [:]
     private let log = Logger(subsystem: "com.saphid.duocord.native", category: "rest")
     private let decoder = JSONDecoder()
+    private(set) var lastRequestDiagnostic: DiscordRequestDiagnostic?
 
     /// `protocolClasses` stand in for the network in tests.
     init(credentials: SessionCredentials, protocolClasses: [AnyClass]? = nil) {
@@ -294,7 +313,30 @@ actor DiscordREST: DiscordAPI {
     // MARK: Endpoints
 
     func channel(_ id: Snowflake) async throws -> Channel {
-        try await get("channels/\(id)", route: "channel:\(id)")
+        try await get(.channel(ChannelID(id.raw)))
+    }
+
+    func guild(_ id: Snowflake) async throws -> Guild {
+        let value: Guild = try await get(.guild(GuildID(id.raw)))
+        guard value.id == id, value.ownerID != nil else { throw DiscordError.decoding("Incomplete guild capability facts") }
+        return value
+    }
+    func guildRoles(_ id: Snowflake) async throws -> [Role] { try await get(.guildRoles(GuildID(id.raw))) }
+    func guildMember(_ user: Snowflake, in guild: Snowflake) async throws -> Member {
+        try await get(.guildMember(GuildID(guild.raw), UserID(user.raw)))
+    }
+    func ownThreadMember(_ thread: Snowflake, account: Snowflake) async throws -> ThreadMemberRef {
+        struct Membership: Decodable {
+            let id: Snowflake
+            let user_id: Snowflake
+            let join_timestamp: String
+            let flags: Int?
+        }
+        let value: Membership = try await get(.ownThreadMember(ChannelID(thread.raw)))
+        guard value.id == thread, value.user_id == account, !value.join_timestamp.isEmpty else {
+            throw DiscordError.decoding("Thread membership identity")
+        }
+        return ThreadMemberRef(joinTimestamp: value.join_timestamp, flags: value.flags)
     }
 
     func messages(channel: Snowflake, before: Snowflake?, after: Snowflake?, around: Snowflake?, limit: Int) async throws -> [Message] {
@@ -302,7 +344,7 @@ actor DiscordREST: DiscordAPI {
         if let before { query.append(URLQueryItem(name: "before", value: before.description)) }
         if let after { query.append(URLQueryItem(name: "after", value: after.description)) }
         if let around { query.append(URLQueryItem(name: "around", value: around.description)) }
-        return try await get("channels/\(channel)/messages", query: query, route: "messages:\(channel)")
+        return try await get(.messages(ChannelID(channel.raw)), query: query)
     }
 
     func pins(channel: Snowflake) async throws -> [Message] {
@@ -322,11 +364,10 @@ actor DiscordREST: DiscordAPI {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let before { query.append(URLQueryItem(name: "before", value: before)) }
         do {
-            return try await request("GET", "channels/\(channel)/messages/pins", query: query, body: nil,
-                                     route: "pins:\(channel)", strictQuery: true)
+            return try await request(.pins(ChannelID(channel.raw)), query: query, body: nil, strictQuery: true)
         } catch let error as DiscordError where before == nil && error.isUnknownRoute {
             log.notice("paged pins route unavailable; using the legacy pins list")
-            let legacy: [Message] = try await get("channels/\(channel)/pins", route: "pins:\(channel)")
+            let legacy: [Message] = try await get(.legacyPins(ChannelID(channel.raw)))
             return PinPage(items: legacy.map { PinPage.Item(message: $0, pinnedAt: nil) }, hasMore: false)
         }
     }
@@ -336,10 +377,10 @@ actor DiscordREST: DiscordAPI {
         if offset > 0 { items.append(URLQueryItem(name: "offset", value: String(offset))) }
         if let guild {
             if let channel { items.append(URLQueryItem(name: "channel_id", value: channel.description)) }
-            return try await get("guilds/\(guild)/messages/search", query: items, route: "search:\(guild)")
+            return try await get(.guildSearch(GuildID(guild.raw)), query: items)
         }
         guard let channel else { return SearchResult(totalResults: 0, messages: []) }
-        return try await get("channels/\(channel)/messages/search", query: items, route: "search:\(channel)")
+        return try await get(.channelSearch(ChannelID(channel.raw)), query: items)
     }
 
     func mentions(limit: Int, before: Snowflake?) async throws -> [Message] {
@@ -347,37 +388,44 @@ actor DiscordREST: DiscordAPI {
                      URLQueryItem(name: "roles", value: "true"),
                      URLQueryItem(name: "everyone", value: "true")]
         if let before { query.append(URLQueryItem(name: "before", value: before.description)) }
-        return try await get("users/@me/mentions", query: query, route: "mentions")
+        return try await get(.mentions, query: query)
     }
 
     func forumThreads(channel: Snowflake, offset: Int) async throws -> ThreadSearchResult {
-        try await get("channels/\(channel)/threads/search", query: [
+        try await get(.forumThreads(ChannelID(channel.raw)), query: [
             URLQueryItem(name: "archived", value: "true"),
             URLQueryItem(name: "sort_by", value: "last_message_time"),
             URLQueryItem(name: "sort_order", value: "desc"),
             URLQueryItem(name: "limit", value: "25"),
             URLQueryItem(name: "offset", value: String(offset)),
-        ], route: "threads:\(channel)")
+        ])
     }
 
     func archivedThreads(channel: Snowflake) async throws -> [Channel] {
         struct Page: Decodable { var threads: [Channel] }
-        let page: Page = try await get("channels/\(channel)/threads/archived/public", query: [URLQueryItem(name: "limit", value: "25")], route: "threads:\(channel)")
+        let page: Page = try await get(.publicArchives(ChannelID(channel.raw)), query: [URLQueryItem(name: "limit", value: "25")])
         return page.threads
     }
 
     func publicArchivedThreads(channel: Snowflake, before: String?) async throws -> ArchivedThreadPage {
         var query = [URLQueryItem(name: "limit", value: "25")]
         if let before { query.append(URLQueryItem(name: "before", value: before)) }
-        return try await get("channels/\(channel)/threads/archived/public", query: query, route: "threads:\(channel)")
+        return try await get(.publicArchives(ChannelID(channel.raw)), query: query)
     }
 
     func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String) async throws -> Message {
-        var body = Self.sendBody(channel: channel, content: content, replyTo: replyTo, pingReply: pingReply, nonce: nonce)
-        if !attachments.isEmpty {
-            body["attachments"] = .array(try await upload(attachments, channel: channel))
+        try await send(channel: channel, content: content, replyTo: replyTo, pingReply: pingReply,
+                       attachments: attachments, nonce: nonce, attempt: SendAttempt())
+    }
+
+    func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String, attempt: SendAttempt) async throws -> Message {
+        try await attempt.run {
+            var body = Self.sendBody(channel: channel, content: content, replyTo: replyTo, pingReply: pingReply, nonce: nonce)
+            if !attachments.isEmpty {
+                body["attachments"] = .array(try await self.upload(attachments, channel: channel, attempt: attempt))
+            }
+            return try await self.request(.send(ChannelID(channel.raw)), body: body, sendAttempt: attempt, dispatchMessage: true)
         }
-        return try await request("POST", "channels/\(channel)/messages", body: body, route: "send:\(channel)")
     }
 
     /// The message body the web client posts. A reply carries
@@ -400,22 +448,22 @@ actor DiscordREST: DiscordAPI {
     }
 
     func edit(channel: Snowflake, message: Snowflake, content: String) async throws -> Message {
-        try await request("PATCH", "channels/\(channel)/messages/\(message)", body: ["content": .string(content)], route: "edit:\(channel)")
+        try await request(.edit(ChannelID(channel.raw), MessageID(message.raw)), body: ["content": .string(content)])
     }
 
     func delete(channel: Snowflake, message: Snowflake) async throws {
-        _ = try await raw("DELETE", "channels/\(channel)/messages/\(message)", body: nil, route: "delete:\(channel)")
+        _ = try await raw(.delete(ChannelID(channel.raw), MessageID(message.raw)), body: nil)
     }
 
     /// The documented `messages/pins` route (never the deprecated `pins/{id}`
     /// one). No body; Discord answers 204 with an empty body.
     func setPinned(channel: Snowflake, message: Snowflake, pinned: Bool) async throws {
-        _ = try await raw(pinned ? "PUT" : "DELETE", "channels/\(channel)/messages/pins/\(message)", body: nil, route: "pin:\(channel)")
+        _ = try await raw(.pin(ChannelID(channel.raw), MessageID(message.raw), pinned: pinned), body: nil)
     }
 
     /// The web client's upload flow: reserve upload URLs, PUT each file, then
     /// reference the uploaded names in the message.
-    private func upload(_ files: [OutgoingAttachment], channel: Snowflake) async throws -> [JSONValue] {
+    private func upload(_ files: [OutgoingAttachment], channel: Snowflake, attempt: SendAttempt) async throws -> [JSONValue] {
         struct Slot: Decodable {
             var id: Int
             var uploadURL: String
@@ -445,7 +493,7 @@ actor DiscordREST: DiscordAPI {
             .object(["filename": .string(file.filename), "file_size": .number(Double(file.data.count)),
                      "id": .string(String(index))])
         })]
-        let slots: Slots = try await self.request("POST", "channels/\(channel)/attachments", body: request, route: "attachments:\(channel)")
+        let slots: Slots = try await self.request(.attachments(ChannelID(channel.raw)), body: request, sendAttempt: attempt)
         guard slots.attachments.count == files.count,
               Set(slots.attachments.map(\.id)) == Set(files.indices) else {
             throw DiscordError.decoding("incomplete or ambiguous upload slots")
@@ -469,6 +517,7 @@ actor DiscordREST: DiscordAPI {
             var put = URLRequest(url: url)
             put.httpMethod = "PUT"
             put.setValue(files[index].contentType, forHTTPHeaderField: "Content-Type")
+            try await attempt.check()
             let (_, response) = try await uploadSession.upload(for: put, from: files[index].data)
             guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true else {
                 throw DiscordError.http((response as? HTTPURLResponse)?.statusCode ?? 0, "upload failed")
@@ -486,8 +535,8 @@ actor DiscordREST: DiscordAPI {
     func acknowledge(_ read: ReadAcknowledgement) async throws {
         // The endpoint returns an ack-token JSON object; accepting raw success
         // also handles empty successful responses without a decoding failure.
-        _ = try await raw("POST", "channels/\(read.channel)/messages/\(read.message)/ack",
-                          body: read.fields, route: "ack:\(read.channel)")
+        _ = try await raw(.ack(ChannelID(read.channel.raw), MessageID(read.message.raw)),
+                          body: read.fields)
     }
 
     func acknowledgeBulk(_ reads: [ReadAcknowledgement]) async throws {
@@ -495,77 +544,76 @@ actor DiscordREST: DiscordAPI {
         guard reads.allSatisfy({ !$0.manual && $0.message > 0 }) else {
             throw DiscordError.http(0, "Bulk acknowledgements require positive, nonmanual boundaries")
         }
-        _ = try await raw("POST", "read-states/ack-bulk", body: ["read_states": .array(reads.map(\.bulkFields))], route: "ack-bulk")
+        _ = try await raw(.ackBulk, body: ["read_states": .array(reads.map(\.bulkFields))])
     }
 
     /// Deprecated by Discord. UI server actions use captured bulk boundaries
     /// instead: the guild endpoint can consume messages arriving after the tap.
     func acknowledgeGuild(_ guild: Snowflake) async throws {
-        _ = try await raw("POST", "guilds/\(guild)/ack", body: nil, route: "guild-ack:\(guild)")
+        _ = try await raw(.guildAck(GuildID(guild.raw)), body: nil)
     }
 
     func typing(channel: Snowflake) async throws {
-        _ = try await raw("POST", "channels/\(channel)/typing", body: nil, route: "typing:\(channel)")
+        _ = try await raw(.typing(ChannelID(channel.raw)), body: nil)
     }
 
     func react(channel: Snowflake, message: Snowflake, emoji: Emoji, add: Bool) async throws {
-        _ = try await raw(add ? "PUT" : "DELETE", "channels/\(channel)/messages/\(message)/reactions/\(emoji.reactionPathSegment)/@me",
-                          body: nil, route: "reactions:\(channel)")
+        _ = try await raw(.reaction(ChannelID(channel.raw), MessageID(message.raw), emoji: emoji.reactionKey, add: add),
+                          body: nil)
     }
 
     func reactions(channel: Snowflake, message: Snowflake, emoji: Emoji, limit: Int) async throws -> [User] {
-        try await get("channels/\(channel)/messages/\(message)/reactions/\(emoji.reactionPathSegment)",
-                      query: [URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "type", value: "0")],
-                      route: "reactors:\(channel)")
+        try await get(.reactions(ChannelID(channel.raw), MessageID(message.raw), emoji: emoji.reactionKey),
+                      query: [URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "type", value: "0")])
     }
 
     func patchNotificationSettings(target: NotificationTarget, patch: NotificationPatch) async throws -> GuildSettingsUpdate {
-        try await request("PATCH", "users/@me/guilds/\(target.routeID)/settings",
-                          body: patch.fields(for: target), route: "guild-settings:\(target.routeID)")
+        try await request(.notificationSettings(target.resource == 0 ? nil : GuildID(target.resource.raw)),
+                          body: patch.fields(for: target))
     }
 
     func relationship(user: Snowflake, action: RelationshipAction) async throws {
-        _ = try await raw(action.method, "users/@me/relationships/\(user)", body: action.body, route: "relationship:\(user)")
+        _ = try await raw(.relationship(UserID(user.raw), removing: action.method == "DELETE"), body: action.body)
     }
 
     func requestFriend(username: FriendUsername) async throws {
-        _ = try await raw("POST", "users/@me/relationships", body: username.fields, route: "friend-request")
+        _ = try await raw(.requestFriend, body: username.fields)
     }
 
     func createDM(recipient: Snowflake) async throws -> Channel {
-        try await request("POST", "users/@me/channels", body: ["recipients": .array([.string(recipient.description)])], route: "create-dm")
+        try await request(.createDM, body: ["recipients": .array([.string(recipient.description)])])
     }
 
     func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel {
-        try await request("PATCH", "channels/\(thread)", body: patch.fields, route: "thread:\(thread)")
+        try await request(.modifyThread(ChannelID(thread.raw)), body: patch.fields)
     }
 
     func deleteThread(_ thread: Snowflake) async throws {
-        _ = try await raw("DELETE", "channels/\(thread)", body: nil, route: "thread:\(thread)")
+        _ = try await raw(.deleteThread(ChannelID(thread.raw)), body: nil)
     }
 
     func joinThread(_ thread: Snowflake) async throws {
-        _ = try await raw("PUT", "channels/\(thread)/thread-members/@me", body: nil, route: "thread-members:\(thread)")
+        _ = try await raw(.joinThread(ChannelID(thread.raw)), body: nil)
     }
 
     func leaveThread(_ thread: Snowflake) async throws {
-        _ = try await raw("DELETE", "channels/\(thread)/thread-members/@me", body: nil, route: "thread-members:\(thread)")
+        _ = try await raw(.leaveThread(ChannelID(thread.raw)), body: nil)
     }
 
     func modifyThreadSettings(_ thread: Snowflake, fields: [String: JSONValue]) async throws -> ThreadMemberSettingsUpdate? {
-        let data = try await raw("PATCH", "channels/\(thread)/thread-members/@me/settings", body: fields, route: "thread-settings:\(thread)")
+        let data = try await raw(.threadSettings(ChannelID(thread.raw)), body: fields)
         // 204: Discord changed nothing.
         guard !data.isEmpty else { return nil }
         do {
             return try decoder.decode(ThreadMemberSettingsUpdate.self, from: data)
         } catch {
-            throw DiscordError.decoding("channels/\(thread)/thread-members/@me/settings")
+            throw DiscordError.decoding(DiscordEndpoint.threadSettings(ChannelID(thread.raw)).descriptor.template)
         }
     }
 
     func settingsProto() async throws -> String? {
         struct Settings: Decodable { var settings: String }
-        let settings: Settings = try await get("users/@me/settings-proto/1", route: "settings")
+        let settings: Settings = try await get(.settingsProto)
         return settings.settings
     }
 
@@ -586,24 +634,28 @@ actor DiscordREST: DiscordAPI {
         return components.url!
     }
 
-    private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], route: String) async throws -> T {
-        try await request("GET", path, query: query, body: nil, route: route)
+    private func get<T: Decodable>(_ endpoint: DiscordEndpoint, query: [URLQueryItem] = []) async throws -> T {
+        try await request(endpoint, query: query, body: nil)
     }
 
-    private func request<T: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [],
-                                       body: [String: JSONValue]?, route: String, strictQuery: Bool = false) async throws -> T {
-        let data = try await raw(method, path, query: query, body: body, route: route, strictQuery: strictQuery)
+    private func request<T: Decodable>(_ endpoint: DiscordEndpoint, query: [URLQueryItem] = [],
+                                       body: [String: JSONValue]?, strictQuery: Bool = false,
+                                       sendAttempt: SendAttempt? = nil, dispatchMessage: Bool = false) async throws -> T {
+        let data = try await raw(endpoint, query: query, body: body, strictQuery: strictQuery, sendAttempt: sendAttempt, dispatchMessage: dispatchMessage)
         do {
             return try decoder.decode(T.self, from: data.isEmpty ? Data("null".utf8) : data)
         } catch {
-            log.error("decode \(path, privacy: .public): \(String(describing: error), privacy: .public)")
-            throw DiscordError.decoding(path)
+            // Decoder descriptions can contain response values and coding keys.
+            log.error("decode \(endpoint.descriptor.template, privacy: .public)")
+            throw DiscordError.decoding(endpoint.descriptor.template)
         }
     }
 
-    private func raw(_ method: String, _ path: String, query: [URLQueryItem] = [], body: [String: JSONValue]?,
-                     route: String, strictQuery: Bool = false) async throws -> Data {
-        var request = URLRequest(url: Self.url(base: base, path: path, query: query, strictQuery: strictQuery))
+    private func raw(_ endpoint: DiscordEndpoint, query: [URLQueryItem] = [], body: [String: JSONValue]?,
+                     strictQuery: Bool = false, sendAttempt: SendAttempt? = nil, dispatchMessage: Bool = false) async throws -> Data {
+        let descriptor = endpoint.descriptor
+        let method = descriptor.method, route = descriptor.bucketIdentity
+        var request = URLRequest(url: Self.url(base: base, path: descriptor.path, query: query, strictQuery: strictQuery))
         request.httpMethod = method
         request.setValue(credentials.token, forHTTPHeaderField: "Authorization")
         if let body {
@@ -613,14 +665,31 @@ actor DiscordREST: DiscordAPI {
         for attempt in 0..<4 {
             let admitted = try await waitForBucket(route)
             let data: Data, response: URLResponse
+            var handedOff = false
             do {
+                try Task.checkCancellation()
+                if let sendAttempt { try await sendAttempt.check() }
+                if dispatchMessage { sendAttempt?.markDispatched() }
+                handedOff = true
                 (data, response) = try await session.data(for: request)
             } catch {
                 inFlight[admitted] = max(0, (inFlight[admitted] ?? 1) - 1)
+                lastRequestDiagnostic = DiscordRequestDiagnostic(endpoint: endpoint,
+                    outcome: method == "GET" ? .readFailed : !handedOff || !DiscordError.mayHaveApplied(error) ? .notDispatched : .unknown, source: .transport)
                 throw error
             }
-            guard let http = response as? HTTPURLResponse else { throw DiscordError.http(0, "no response") }
+            guard let http = response as? HTTPURLResponse else {
+                inFlight[admitted] = max(0, (inFlight[admitted] ?? 1) - 1)
+                lastRequestDiagnostic = DiscordRequestDiagnostic(endpoint: endpoint,
+                    outcome: method == "GET" ? .readFailed : .unknown, source: .transport)
+                throw DiscordError.http(0, "no response")
+            }
             record(http, route: route, admitted: admitted)
+            // Only the numeric code enters safe metadata, never response text.
+            struct DiagnosticCode: Decodable { let code: Int? }
+            let code = (try? decoder.decode(DiagnosticCode.self, from: data))?.code
+            lastRequestDiagnostic = DiscordRequestDiagnostic(endpoint: endpoint, status: http.statusCode, code: code,
+                outcome: (200..<300).contains(http.statusCode) ? .confirmed : method == "GET" ? .readFailed : (400..<500).contains(http.statusCode) ? .refused : .unknown)
             switch http.statusCode {
             case 200..<300:
                 return data
@@ -634,11 +703,11 @@ actor DiscordREST: DiscordAPI {
                 if limited?.global == true { globalBlockedUntil = until } else { blockedUntil[bucketKey(route)] = until }
                 // Nothing is sent without a tap: a write is never sent again by itself.
                 guard method == "GET" else {
-                    log.notice("429 on \(route, privacy: .public) (\(method, privacy: .public)), not retried")
+                    log.notice("429 on \(descriptor.template, privacy: .public) (\(method, privacy: .public)), not retried")
                     throw DiscordError.rateLimited(retryAfter: wait)
                 }
                 guard attempt < 3 else { throw DiscordError.http(429, "rate limited") }
-                log.notice("429 on \(route, privacy: .public), waiting \(wait)s")
+                log.notice("429 on \(descriptor.template, privacy: .public), waiting \(wait)s")
                 continue
             default:
                 // Decode fields independently: a malformed code must not discard
@@ -668,6 +737,7 @@ actor DiscordREST: DiscordAPI {
     @discardableResult
     private func waitForBucket(_ route: String) async throws -> String {
         while true {
+            try Task.checkCancellation()
             // Recomputed after every sleep: a response may have mapped the route
             // to Discord's shared bucket meanwhile.
             let key = bucketKey(route)

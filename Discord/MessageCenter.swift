@@ -14,9 +14,20 @@ enum TimelineChange {
     case removed(Set<Snowflake>)
 }
 
-nonisolated enum SendState: Equatable, Sendable {
+nonisolated enum SendState: Equatable, Hashable, Sendable {
     case sending
+    /// Discord explicitly refused the final message POST.
     case failed(String)
+    case notDispatched(String)
+    case unknown(String)
+
+    var recoveryTitle: String? {
+        switch self {
+        case .sending: nil
+        case .failed, .notDispatched: "Retry Send"
+        case .unknown: "Check Delivery"
+        }
+    }
 }
 
 /// One channel's loaded window of history plus pending sends.
@@ -33,6 +44,7 @@ final class MessageTimeline {
     /// Newest-first IDs for which the window starts at the bottom of history.
     @ObservationIgnored private(set) var messages: [Message] = []
     @ObservationIgnored private(set) var sendStates: [String: SendState] = [:]
+    @ObservationIgnored var onSendConfirmed: ((String, Message) -> Void)?
     @ObservationIgnored private var listeners: [UUID: (TimelineChange) -> Void] = [:]
     /// The newest message the list has shown; read state is acked up to it.
     @ObservationIgnored var lastAccess = Date.now
@@ -176,8 +188,9 @@ final class MessageTimeline {
             }
         }
         for message in page {
-            if let nonce = message.nonce, sendStates[nonce] != nil {
+            if let nonce = pendingNonce(matching: message) {
                 sendStates[nonce] = nil
+                onSendConfirmed?(nonce, message)
                 let echoes = Set(messages.filter { $0.nonce == nonce }.map(\.id))
                 messages.removeAll { $0.nonce == nonce }
                 if !echoes.isEmpty { publish(.removed(echoes)) }
@@ -282,7 +295,7 @@ final class MessageTimeline {
             publish(.prepended(older.count))
             trimHistory(fromFront: false)
         } catch {
-            Logger(subsystem: "com.saphid.duocord.native", category: "timeline").error("older: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "com.saphid.duocord.native", category: "timeline").error("older history request failed")
         }
     }
 
@@ -310,7 +323,7 @@ final class MessageTimeline {
             publish(position == messages.count - newer.count ? .appended(newer.count) : .reset)
             trimHistory(fromFront: true)
         } catch {
-            Logger(subsystem: "com.saphid.duocord.native", category: "timeline").error("newer: \(error.localizedDescription, privacy: .public)")
+            Logger(subsystem: "com.saphid.duocord.native", category: "timeline").error("newer history request failed")
         }
     }
 
@@ -319,8 +332,9 @@ final class MessageTimeline {
     func receive(_ message: Message) {
         guard !readTombstones.contains(message.id), pendingDeletes[message.id] == nil else { return }
         // A confirmed send replaces its local echo wherever the window is.
-        if let nonce = message.nonce, sendStates[nonce] != nil {
+        if let nonce = pendingNonce(matching: message) {
             sendStates[nonce] = nil
+            onSendConfirmed?(nonce, message)
             if let pending = messages.lastIndex(where: { $0.nonce == nonce }) {
                 let echo = messages.remove(at: pending)
                 publish(.removed([echo.id]))
@@ -529,6 +543,8 @@ final class MessageTimeline {
         /// The newest toggle's operation id.
         var latest: Int
         var confirmed: Bool
+        var preflight: @MainActor (Bool, Bool) -> Bool
+        var failure: @MainActor (Error, Bool, Bool) async -> Void
         var sending: (op: Int, add: Bool, echoed: Bool)?
         /// Where the pill was before the first toggle (for a rollback).
         var position: Int?
@@ -569,11 +585,23 @@ final class MessageTimeline {
         reactionConfirmations[id, default: 0] &+= 1
     }
 
+    /// Excludes our optimistic contribution and restores our last confirmed
+    /// contribution. A queued removal can turn an existing emoji into a new
+    /// one, so this is checked again for each actual write.
+    func hasConfirmedReaction(_ emoji: Emoji, on id: Snowflake) -> Bool {
+        let key = ReactionKey(message: id, emoji: emoji.reactionKey)
+        let shown = messages.first { $0.id == id }?.reactions.first { $0.emoji.reactionKey == emoji.reactionKey }
+        let mine = reactionWrites[key]?.confirmed ?? (shown?.me ?? false)
+        return (shown?.count ?? 0) - (shown?.me == true ? 1 : 0) + (mine ? 1 : 0) > 0
+    }
+
     /// Your reaction: shown at once, then sent after any earlier write of
     /// the same reaction; put back as Discord has it if refused while still
     /// your latest toggle. Nil when there was nothing to change.
     @discardableResult
-    func sendReaction(_ emoji: Emoji, on id: Snowflake, add: Bool, api: DiscordAPI) -> Task<ReactionOutcome, Never>? {
+    func sendReaction(_ emoji: Emoji, on id: Snowflake, add: Bool, api: DiscordAPI,
+                      start: @escaping @MainActor (Bool, Bool) -> Bool = { _, _ in true },
+                      failure: @escaping @MainActor (Error, Bool, Bool) async -> Void = { _, _, _ in }) -> Task<ReactionOutcome, Never>? {
         let key = ReactionKey(message: id, emoji: emoji.reactionKey)
         let position = index(of: id).flatMap { messages[$0].reactions.firstIndex { $0.emoji.reactionKey == emoji.reactionKey } }
         guard setMyReaction(emoji, on: id, add: add) else { return nil }
@@ -582,9 +610,11 @@ final class MessageTimeline {
         if var write = reactionWrites[key] {
             write.intent = add
             write.latest = op
+            write.preflight = start
+            write.failure = failure
             reactionWrites[key] = write
         } else {
-            reactionWrites[key] = ReactionWrite(intent: add, latest: op, confirmed: !add, position: position)
+            reactionWrites[key] = ReactionWrite(intent: add, latest: op, confirmed: !add, preflight: start, failure: failure, position: position)
             reactionWrites[key]?.worker = Task { await sendReactionWrites(key, emoji: emoji, api: api) }
         }
         guard let worker = reactionWrites[key]?.worker else { return nil }
@@ -605,17 +635,26 @@ final class MessageTimeline {
             reactionWrites[key] = write
             var accepted = true
             var learned: Bool?
+            let existing = hasConfirmedReaction(emoji, on: key.message)
             do {
+                // Remove the optimistic own contribution and put back the last
+                // confirmed own state before deciding existing-vs-new emoji.
+                guard !Task.isCancelled, write.preflight(add, existing) else {
+                    throw CapabilityPreflightRefusal()
+                }
                 try await api.react(channel: channelID, message: key.message, emoji: emoji, add: add)
             } catch {
                 Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
-                    .error("reaction \(add ? "add" : "remove", privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                    .error("reaction request failed")
                 // Its gateway event already arrived: Discord applied it.
+                if reactionWrites[key]?.sending?.echoed != true, !(error is CapabilityPreflightRefusal) {
+                    await write.failure(error, add, existing)
+                }
                 accepted = reactionWrites[key]?.sending?.echoed ?? false
                 // A lost response may hide an applied write: ask Discord (a
                 // read; nothing is sent) instead of guessing. An echo
                 // arriving meanwhile still counts.
-                if !accepted, DiscordError.mayHaveApplied(error) {
+                if !accepted, !(error is CapabilityPreflightRefusal), DiscordError.mayHaveApplied(error) {
                     learned = await reactionOnServer(key, api: api)
                     accepted = (reactionWrites[key]?.sending?.echoed ?? false) || learned == add
                 }
@@ -656,7 +695,7 @@ final class MessageTimeline {
             return message.reactions.first { $0.emoji.reactionKey == key.emoji }?.me ?? false
         } catch {
             Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
-                .error("reaction check failed: \(error.localizedDescription, privacy: .public)")
+                .error("reaction readback failed")
             return nil
         }
     }
@@ -696,7 +735,9 @@ final class MessageTimeline {
     /// the message meanwhile). Nil when there is nothing to change. A save
     /// replaced by a newer one reports true; the newest decides.
     @discardableResult
-    func sendEdit(_ id: Snowflake, content: String, api: DiscordAPI) -> Task<Bool, Never>? {
+    func sendEdit(_ id: Snowflake, content: String, api: DiscordAPI,
+                  start: @escaping @MainActor () -> Bool = { true },
+                  failure: @escaping @MainActor (Error) async -> Void = { _ in }) -> Task<Bool, Never>? {
         guard let index = index(of: id), messages[index].content != content else { return nil }
         let original = messages[index]
         var edited = original
@@ -712,20 +753,21 @@ final class MessageTimeline {
         let previous = state.tail
         let request = Task {
             _ = await previous?.value
-            return await performEdit(id, content: content, generation: generation, api: api)
+            return await performEdit(id, content: content, generation: generation, api: api, start: start, failure: failure)
         }
         state.tail = request
         edits[id] = state
         return request
     }
 
-    private func performEdit(_ id: Snowflake, content: String, generation: Int, api: DiscordAPI) async -> Bool {
+    private func performEdit(_ id: Snowflake, content: String, generation: Int, api: DiscordAPI, start: @MainActor () -> Bool, failure: @MainActor (Error) async -> Void) async -> Bool {
         // A newer save replaced this text before it went out.
         guard var state = edits[id], state.latest == generation else { return true }
         state.sending = (generation, content, false)
         edits[id] = state
         var applied = true
         do {
+            guard !Task.isCancelled, start() else { throw CapabilityPreflightRefusal() }
             let confirmed = try await api.edit(channel: channelID, message: id, content: content)
             guard var current = edits[id] else { return true }
             let useResponse = !Self.isNewerEdit(current.server.edited, than: confirmed.editedTimestamp)
@@ -756,8 +798,9 @@ final class MessageTimeline {
             }
         } catch {
             Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
-                .error("edit failed: \(error.localizedDescription, privacy: .public)")
+                .error("edit request failed")
             // Its gateway event already arrived: Discord saved it.
+            if edits[id]?.sending?.echoed != true, !(error is CapabilityPreflightRefusal) { await failure(error) }
             applied = edits[id]?.sending?.echoed ?? false
         }
         guard var state = edits[id] else { return applied }
@@ -824,7 +867,8 @@ final class MessageTimeline {
     /// MESSAGE_DELETE for it already arrived). Nil when the message isn't
     /// in the window.
     @discardableResult
-    func sendDelete(_ id: Snowflake, api: DiscordAPI) -> Task<Bool, Never>? {
+    func sendDelete(_ id: Snowflake, api: DiscordAPI, start: @escaping @MainActor () -> Bool = { true },
+                    failure: @escaping @MainActor (Error) async -> Void = { _ in }) -> Task<Bool, Never>? {
         guard let index = index(of: id), pendingDeletes[id] == nil else { return nil }
         let original = messages.remove(at: index)
         publish(.removed([id]))
@@ -833,13 +877,15 @@ final class MessageTimeline {
         return Task {
             defer { pendingDeletes[id] = nil; hiddenPinStates[id] = nil }
             do {
+                guard !Task.isCancelled, start() else { throw CapabilityPreflightRefusal() }
                 try await api.delete(channel: channel, message: id)
                 if activePageReads > 0 { readTombstones.insert(id) }
                 return true
             } catch {
                 Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
-                    .error("delete failed: \(error.localizedDescription, privacy: .public)")
+                    .error("delete request failed")
                 // Its gateway event already arrived: Discord deleted it.
+                if pendingDeletes[id] != true, !(error is CapabilityPreflightRefusal) { await failure(error) }
                 if pendingDeletes[id] == true { return true }
                 restore(original)
                 return false
@@ -881,6 +927,7 @@ final class MessageTimeline {
     /// has the pin as asked.
     @discardableResult
     func sendPin(_ id: Snowflake, pinned: Bool, api: DiscordAPI, start: @escaping @MainActor () -> Bool = { true },
+                 failure: @escaping @MainActor (Error) async -> Void = { _ in },
                  result: @escaping @MainActor () -> Bool = { true },
                  unwindUnsent: (@MainActor () -> Bool)? = nil,
                  completion: @escaping @MainActor (Bool) -> Void = { _ in }) -> Task<Bool, Never>? {
@@ -903,8 +950,9 @@ final class MessageTimeline {
                     applied = true
                 } catch {
                     Logger(subsystem: "com.saphid.duocord.native", category: "timeline")
-                        .error("pin failed: \(error.localizedDescription, privacy: .public)")
+                        .error("pin request failed")
                     // Its gateway event already arrived: Discord applied it.
+                    if pendingPins[id]?.gateway != pinned { await failure(error) }
                     applied = pendingPins[id]?.gateway == pinned
                 }
             }
@@ -982,18 +1030,34 @@ final class MessageTimeline {
         publish(.appended(1))
     }
 
+    private func pendingNonce(matching message: Message) -> String? {
+        guard message.channelID == channelID, let nonce = message.nonce, sendStates[nonce] != nil,
+              messages.contains(where: { $0.nonce == nonce && $0.author.id == message.author.id }) else { return nil }
+        return nonce
+    }
+
     func markFailed(nonce: String, error: String) {
+        setSendState(nonce: nonce, state: .failed(error))
+    }
+
+    func setSendState(nonce: String, state: SendState) {
         guard sendStates[nonce] != nil, let index = messages.lastIndex(where: { $0.nonce == nonce }) else { return }
-        sendStates[nonce] = .failed(error)
+        sendStates[nonce] = state
         publish(.updated([messages[index].id]))
     }
 
     func confirm(nonce: String, with message: Message) {
         guard sendStates[nonce] != nil else { return }
+        // HTTP can omit nonce. The caller already correlated this response to
+        // the attempt; receive still validates channel and pending author.
+        var message = message
+        guard message.nonce == nil || message.nonce == nonce else { return }
+        message.nonce = nonce
         receive(message)
     }
 
     func discardPending(nonce: String) {
+        guard sendStates[nonce] != nil else { return }
         sendStates[nonce] = nil
         guard let index = messages.lastIndex(where: { $0.nonce == nonce }) else { return }
         let id = messages[index].id
@@ -1048,7 +1112,7 @@ final class MessageCenter {
 
     private func evictIfNeeded(keeping channel: Snowflake) {
         guard timelines.count > cacheLimit else { return }
-        let victims = timelines.values.filter { $0.channelID != channel }
+        let victims = timelines.values.filter { $0.channelID != channel && $0.sendStates.isEmpty }
             .sorted { $0.lastAccess < $1.lastAccess }
             .prefix(timelines.count - cacheLimit)
         for victim in victims { timelines[victim.channelID] = nil }

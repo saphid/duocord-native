@@ -798,13 +798,13 @@ final class PinMessageTests: XCTestCase {
         let pinApplied = await pin.value
         XCTAssertFalse(pinApplied)
         XCTAssertEqual(pinned(timeline, 101), false)
-        XCTAssertEqual(model.toast?.text, "Couldn't pin message")
+        XCTAssertEqual(model.toast?.text, refusal.localizedDescription, "the original Discord refusal is preserved")
         let unpin = try XCTUnwrap(model.setPinned(false, message: try XCTUnwrap(current(timeline, 102))))
         XCTAssertEqual(pinned(timeline, 102), false)
         let unpinApplied = await unpin.value
         XCTAssertFalse(unpinApplied)
         XCTAssertEqual(pinned(timeline, 102), true)
-        XCTAssertEqual(model.toast?.text, "Couldn't unpin message")
+        XCTAssertEqual(model.toast?.text, refusal.localizedDescription, "the original Discord refusal is preserved")
         XCTAssertEqual(mock.pinOperations.map(\.pinned), [true, false])
         let pins = try await mock.pins(channel: chat)
         XCTAssertEqual(pins.map(\.id), generated, "a refused write changes no pins")
@@ -889,7 +889,7 @@ final class PinMessageTests: XCTestCase {
         let unpinApplied = await unpin.value
         XCTAssertFalse(unpinApplied)
         XCTAssertEqual(pinned(timeline, 102), false, "rolls back to what Discord last showed, not the obsolete pin")
-        XCTAssertEqual(model.toast?.text, "Couldn't unpin message")
+        XCTAssertEqual(model.toast?.text, refusal.localizedDescription, "the original Discord refusal is preserved")
     }
 
     func testDeletionInFlightNeverRestoresObsoletePinMetadata() async throws {
@@ -946,7 +946,17 @@ final class PinMessageTests: XCTestCase {
             XCTAssertFalse(applied, name)
             XCTAssertTrue(mock.pinOperations.isEmpty, "\(name): no request may start")
             XCTAssertEqual(pinned(timeline, 101), false, "\(name): the optimistic pin goes back")
-            XCTAssertEqual(model.toast?.text, "Couldn't pin message", "\(name): same login, so the reader learns it did not happen")
+            switch name {
+            case "permission revoked":
+                XCTAssertEqual(model.toast?.text, "Missing Pin Messages. Ask a server moderator for access.")
+            case "channel removed":
+                XCTAssertEqual(model.toast?.text, "Channel information is unavailable. Refresh eligibility and try again.")
+            default:
+                // Cancellation retires the intent; READY replacement retires
+                // its fact epoch, even when the account/login is unchanged.
+                XCTAssertNil(model.toast, "\(name): obsolete feedback must not reach the current reader")
+            }
+            XCTAssertNil(model.capabilityFreshness.lastRefusal, "no request means no server refusal to attribute")
         }
     }
 
@@ -1239,7 +1249,7 @@ final class DiscordFailureTests: XCTestCase {
 
     func testPermissionFailuresGiveConservativeActionableFeedback() async throws {
         let cases = [
-            (50001, "You don't have access to this resource. Check your server or channel access."),
+            (50001, "Discord refused access for this action. Refresh eligibility and try again."),
             (50013, "Discord denied this action because you don't have the required permissions. Check your server or channel permissions."),
             (50007, "Discord couldn't deliver a message to this person. Their privacy settings or your relationship may prevent messages."),
         ]

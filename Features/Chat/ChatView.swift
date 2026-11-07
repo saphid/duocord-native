@@ -487,19 +487,34 @@ struct Composer: View {
     }
 
     var body: some View {
-        if !store.canSend(in: channel) {
-            Label("You don't have permission to send messages here.", systemImage: "lock.fill")
-                .font(.footnote)
-                .foregroundStyle(Color.textMuted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color.elevated)
-        } else {
+        TimelineView(.periodic(from: .now, by: 1)) { clock in
+            content(at: clock.date)
+        }
+    }
+
+    private func content(at now: Date) -> some View {
+            let availability = model.composerCapability(in: channel.id, now: now)
+            let canSend = availability.canSubmit
             let query = activeQuery
             let suggestions = query.map { model.suggestions(for: $0, in: channel) } ?? []
             let fold = foldLayout(hasStrip: usesStrip && !suggestions.isEmpty)
-            VStack(spacing: 6) {
+            return VStack(spacing: 6) {
+                if let explanation = availability.explanation {
+                    Label(explanation, systemImage: availability.canSubmit ? "info.circle" : "lock.fill")
+                        .font(.footnote)
+                        .foregroundStyle(Color.textMuted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .accessibilityIdentifier("composerCapability")
+                }
+                if availability.canRefresh {
+                    Button(model.capabilityFreshness.isRefreshing(channel: channel.id, scope: model.operationScope) ? "Refreshing Eligibility…" : "Refresh Eligibility") {
+                        model.refreshEligibility(in: channel.id)
+                    }
+                    .disabled(model.capabilityFreshness.isRefreshing(channel: channel.id, scope: model.operationScope))
+                    .font(.footnote)
+                    .accessibilityIdentifier("refreshComposerEligibility")
+                }
                 if let query, !suggestions.isEmpty, !usesStrip {
                     // Right above the field, inside the controls: it rises with
                     // the keyboard, stays in the conversation's column (never
@@ -588,8 +603,8 @@ struct Composer: View {
                     .accessibilityLabel("Add Attachment")
                     .frame(width: 44, height: 44)
                     // An edit changes text only.
-                    .disabled(isEditing)
-                    .opacity(isEditing ? 0.4 : 1)
+                    .disabled(isEditing || !availability.canAttachFiles)
+                    .opacity(isEditing || !availability.canAttachFiles ? 0.4 : 1)
                     ComposerTextInput(draft: draft, model: model, channelID: channel.id,
                                       wantsFocus: model.composerContinuity.focusedChannel == channel.id,
                                       maximumLines: tableTopTyping ? 1 : 6, placeholder: placeholder,
@@ -637,7 +652,6 @@ struct Composer: View {
                 if case .success(let urls) = result { addFiles(urls) }
             }
             .onChange(of: photoItems) { _, items in addPhotos(items) }
-        }
     }
 
 
@@ -765,11 +779,6 @@ struct Composer: View {
     }
 
     private var isEditing: Bool { draft.wrappedValue.editing != nil }
-
-    private var canSend: Bool {
-        let hasText = !draft.wrappedValue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return isEditing ? hasText : hasText || !draft.wrappedValue.attachments.isEmpty
-    }
 
     private func addPhotos(_ items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }

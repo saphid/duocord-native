@@ -1,0 +1,13 @@
+{
+  "taskId": "node:delegated-task:command%3Amcp%3Ab280a752-8bda-444f-823c-98ca66b71819%3Adelegate-task%3A85c102ff-463f-47d1-a48f-b1ae1434e06a",
+  "providerInstanceId": "claudeAgent",
+  "model": "claude-opus-5-5",
+  "options": [
+    {
+      "id": "effort",
+      "value": "high"
+    }
+  ],
+  "status": "failed",
+  "summary": "Claude API rate limit reached. Try again later."
+}

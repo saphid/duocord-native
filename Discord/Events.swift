@@ -204,14 +204,42 @@ nonisolated struct GuildRoleEvent: Decodable, Sendable {
     }
 }
 
+/// Gateway member updates are patches: omitted is not the same as explicit null.
 nonisolated struct GuildMemberUpdate: Decodable, Sendable {
     var guildID: Snowflake
     var user: User
     var nick: String?
-    var roles: [Snowflake]
+    var roles: [Snowflake]?
+    var avatar: String?
+    var communicationDisabledUntil: String?
+    var nickProvided: Bool
+    var avatarProvided: Bool
+    var timeoutProvided: Bool
     enum CodingKeys: String, CodingKey {
-        case user, nick, roles
+        case user, nick, roles, avatar
         case guildID = "guild_id"
+        case communicationDisabledUntil = "communication_disabled_until"
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guildID = try c.decode(Snowflake.self, forKey: .guildID)
+        user = try c.decode(User.self, forKey: .user)
+        nick = try c.decodeIfPresent(String.self, forKey: .nick)
+        roles = try c.decodeIfPresent([Snowflake].self, forKey: .roles)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        communicationDisabledUntil = try c.decodeIfPresent(String.self, forKey: .communicationDisabledUntil)
+        nickProvided = c.contains(.nick); avatarProvided = c.contains(.avatar)
+        timeoutProvided = c.contains(.communicationDisabledUntil)
+    }
+    func applying(to previous: Member?) -> Member {
+        var member = previous ?? Member(user: user, nick: nil, roles: [])
+        member.user = user; member.userID = user.id
+        if let roles { member.roles = roles; member.rolesKnown = true }
+        else if previous == nil { member.rolesKnown = false }
+        if nickProvided { member.nick = nick }
+        if avatarProvided { member.avatar = avatar }
+        if timeoutProvided { member.communicationDisabledUntil = communicationDisabledUntil }
+        return member
     }
 }
 

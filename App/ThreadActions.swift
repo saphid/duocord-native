@@ -104,8 +104,9 @@ extension AppModel {
     }
 
     private func enqueue(_ action: ThreadAction, on id: Snowflake) -> Task<Void, Never> {
-        guard threadCapabilities(id).allows(action) else { return Task {} }
-        let previous = threads.writes[id], session = threads.session, api = api
+        guard preflight(.thread(action), in: id) else { return Task {} }
+        let previous = threads.writes[id], session = threads.session, scope = operationScope, api = api
+        let feedback = OperationFeedback(OperationContext(operation: .thread(action), channel: id), model: self)
         threads.saving[id, default: 0] += 1
         let task = Task { [weak self] in
             await previous?.value
@@ -114,34 +115,53 @@ extension AppModel {
                 self.threads.saving[id, default: 1] -= 1
                 if self.threads.saving[id] == 0 { self.threads.saving[id] = nil; self.threads.writes[id] = nil }
             }
-            guard self.threadCapabilities(id).allows(action), let thread = self.store.channel(id) else { return }
+            guard let scope, self.operationScope == scope, self.preflight(.thread(action), in: id),
+                  let thread = self.store.channel(id) else { return }
+            let confirmed = {
+                let current = self.store.channel(id)
+                switch action {
+                case .delete: return current == nil
+                case .join: return self.store.joinedThreads.contains(id)
+                case .leave: return !self.store.joinedThreads.contains(id)
+                case .rename(let name): return current?.name == name
+                case .close: return current?.threadMetadata?.archived == true
+                case .reopen: return current?.threadMetadata?.archived == false
+                case .lock: return current?.threadMetadata?.locked == true
+                case .unlock: return current?.threadMetadata?.locked == false
+                }
+            }
             do {
                 switch action {
                 case .join:
                     try await api.joinThread(id)
-                    guard self.threads.session == session else { return }
+                    guard self.threads.session == session, self.operationScope == scope else { return }
                     self.store.setThreadMembership(id, joined: true)
                 case .leave:
                     try await api.leaveThread(id)
-                    guard self.threads.session == session else { return }
+                    guard self.threads.session == session, self.operationScope == scope else { return }
                     self.store.setThreadMembership(id, joined: false)
                 case .delete:
                     try await api.deleteThread(id)
-                    guard self.threads.session == session else { return }
+                    guard self.threads.session == session, self.operationScope == scope else { return }
                     self.store.removeChannel(id)
                     self.threadRemoved(id, parent: thread.parentID)
                 case .rename, .close, .reopen, .lock, .unlock:
                     guard let patch = action.patch else { return }
                     var updated = try await api.modifyThread(id, patch: patch)
-                    guard self.threads.session == session else { return }
+                    guard self.threads.session == session, self.operationScope == scope else { return }
                     // A deleted thread stays deleted, even if this answer arrives late.
                     guard self.store.channel(id) != nil else { return }
                     if updated.guildID == nil { updated.guildID = thread.guildID }
                     self.store.upsert(channel: updated)
                 }
             } catch {
-                guard self.threads.session == session else { return }
-                self.showError("Couldn’t \(action.failure). " + error.localizedDescription)
+                guard self.threads.session == session, self.operationScope == scope else { return }
+                if confirmed() { return }
+                await feedback.capture(error, model: self)
+                guard self.threads.session == session, self.operationScope == scope else { return }
+                // A matching gateway state, including deletion, wins over the
+                // late refusal and its attribution reads.
+                if !confirmed() { feedback.publish("Couldn’t \(action.failure). " + error.localizedDescription, model: self) }
             }
         }
         threads.writes[id] = task

@@ -80,6 +80,9 @@ final class AppModel {
     }
     let store: DiscordStore
     let messages = MessageCenter()
+    let operationFacts = OperationFacts()
+    let capabilityFreshness = CapabilityFreshness()
+    @ObservationIgnored var capabilityRefreshTimeout: Duration = .seconds(4)
     let settings = AppSettings()
     let fold = FoldState()
     private(set) var api: DiscordAPI = OfflineAPI()
@@ -301,8 +304,34 @@ final class AppModel {
 
     @ObservationIgnored private var gateway: GatewayConnection?
     @ObservationIgnored private var hadReady = false
-    /// Everything needed to resend a message, kept per nonce until it is confirmed.
-    @ObservationIgnored private var outgoing: [String: (text: String, reply: Message?, ping: Bool, files: [DraftAttachment])] = [:]
+    /// Payload and logical identity survive every uncertain transport outcome.
+    private final class OutgoingSend {
+        let echo: Message
+        let text: String
+        let reply: Message?
+        let ping: Bool
+        let files: [DraftAttachment]
+        let authority: AlertAuthority
+        let alertAuthority: (start: () -> Bool, result: () -> Bool)?
+        let timeline: MessageTimeline
+        let operationScope: OperationFacts.Scope?
+        var confirmed: Message?
+        var refusal: OperationRefusal?
+        var task: Task<Bool?, Never>?
+        var reconciliation: Task<Bool?, Never>?
+
+        init(echo: Message, text: String, reply: Message?, ping: Bool, files: [DraftAttachment],
+             authority: AlertAuthority, alertAuthority: (start: () -> Bool, result: () -> Bool)?, timeline: MessageTimeline, operationScope: OperationFacts.Scope?) {
+            self.echo = echo; self.text = text; self.reply = reply; self.ping = ping; self.files = files
+            self.authority = authority; self.alertAuthority = alertAuthority; self.timeline = timeline
+            self.operationScope = operationScope
+        }
+    }
+    @ObservationIgnored private var outgoing: [String: OutgoingSend] = [:]
+    @ObservationIgnored private var lastOutgoingID: UInt64 = 0
+    /// Begins at enqueue, before upload or rate-bucket admission.
+    @ObservationIgnored var outgoingSendTimeout: Duration = .seconds(45)
+    @ObservationIgnored var outgoingReadbackTimeout: Duration = .seconds(10)
     @ObservationIgnored private var gatewayTask: Task<Void, Never>?
     @ObservationIgnored private var ackTasks: [Snowflake: Task<Void, Never>] = [:]
     @ObservationIgnored private var lastTyping: [Snowflake: Date] = [:]
@@ -341,6 +370,7 @@ final class AppModel {
             self.notifications.clear(channel: channel, through: boundary, store: self.store)
         }
         self.store.onReadReset = { [weak self] in
+            self?.capabilityFreshness.reset()
             self?.readResets &+= 1
             self?.cancelReadOperations()
             self?.ackTasks.values.forEach { $0.cancel() }
@@ -781,7 +811,20 @@ final class AppModel {
         #endif
     }
 
-    func timeline(for channel: Snowflake) -> MessageTimeline { messages.timeline(for: channel) }
+    func timeline(for channel: Snowflake) -> MessageTimeline {
+        let timeline = messages.timeline(for: channel)
+        timeline.onSendConfirmed = { [weak self] nonce, message in
+            guard let self, let payload = self.outgoing[nonce], self.isCurrentSend(payload),
+                  message.channelID == payload.echo.channelID, message.author.id == payload.authority.account else { return }
+            payload.confirmed = message
+            if let scope = payload.operationScope {
+                self.noteConfirmedSend(in: message.channelID, author: message.author.id,
+                                       at: CapabilityResolver.timeoutDate(message.timestamp) ?? .now, scope: scope)
+            }
+            self.outgoing[nonce] = nil
+        }
+        return timeline
+    }
 
     /// Snapshot plus the open conversation's newest page, for the next cold start.
     func saveCache() {
@@ -847,14 +890,17 @@ final class AppModel {
         Task { [api] in try? await api.typing(channel: channel) }
     }
 
-    func send(in channel: Snowflake, pingReply: Bool? = nil) {
-        guard let draft = drafts[channel] else { return }
-        if draft.editing != nil { return saveEdit(in: channel) }
+    @discardableResult
+    func send(in channel: Snowflake, pingReply: Bool? = nil) -> Task<Bool?, Never>? {
+        guard let draft = drafts[channel] else { return nil }
+        if draft.editing != nil { saveEdit(in: channel); return nil }
         let text = outgoingText(draft, in: channel)
-        guard !text.isEmpty || !draft.attachments.isEmpty, let me = store.me else { return }
-        enqueueSend(text, in: channel, author: me, replyTo: draft.replyTo, ping: pingReply ?? pingReplies, files: draft.attachments)
+        guard !text.isEmpty || !draft.attachments.isEmpty else { return nil }
+        guard preflight(draftOperation(draft, in: channel), in: channel), let me = store.me else { return nil }
+        let task = enqueueSend(text, in: channel, author: me, replyTo: draft.replyTo, ping: pingReply ?? pingReplies, files: draft.attachments)
         drafts[channel] = Draft()
         lastTyping[channel] = nil
+        return task
     }
 
     /// The pending echo, nonce, confirm and failure path shared by the composer
@@ -865,7 +911,9 @@ final class AppModel {
     private func enqueueSend(_ text: String, in channel: Snowflake, author me: User, replyTo: Message?, ping: Bool,
                              files attachments: [DraftAttachment],
                              authority: (start: () -> Bool, result: () -> Bool)? = nil) -> Task<Bool?, Never> {
-        let nonce = String(Snowflake.at(.now).raw + UInt64.random(in: 0..<4096))
+        lastOutgoingID = max(lastOutgoingID &+ 1, Snowflake.at(.now).raw + UInt64.random(in: 0..<4096))
+        let nonce = String(lastOutgoingID)
+        let sendAuthority = AlertAuthority(generation: accountGeneration, account: me.id, resets: readResets)
         let timeline = timeline(for: channel)
         var echo = Message(id: Snowflake(UInt64(nonce) ?? 0), channelID: channel, guildID: store.channel(channel)?.guildID,
                            author: me, content: text, timestamp: ISO8601DateFormatter().string(from: .now),
@@ -877,49 +925,148 @@ final class AppModel {
                        proxyURL: nil, width: nil, height: nil, contentType: file.contentType, description: nil, flags: nil, durationSecs: nil)
         }
         timeline.addPending(echo)
-        outgoing[nonce] = (text, replyTo, ping, attachments)
-        let reply = replyTo?.id
-        let files = attachments.map { OutgoingAttachment(filename: $0.filename, data: $0.data, contentType: $0.contentType) }
-        return Task { [api] in
-            if let authority, Task.isCancelled || !authority.start() {
-                // Never sent. Only a still-current login removes its echo.
-                if authority.result() {
-                    self.outgoing[nonce] = nil
-                    timeline.discardPending(nonce: nonce)
+        let payload = OutgoingSend(echo: echo, text: text, reply: replyTo, ping: ping, files: attachments,
+                                   authority: sendAuthority,
+                                   alertAuthority: authority, timeline: timeline, operationScope: operationScope)
+        outgoing[nonce] = payload
+        return dispatchSend(payload, nonce: nonce)
+    }
+
+    private func isCurrentSend(_ payload: OutgoingSend) -> Bool {
+        payload.authority.generation == accountGeneration && payload.authority.account == store.me?.id && payload.authority.resets == readResets
+    }
+
+    private func dispatchSend(_ payload: OutgoingSend, nonce: String) -> Task<Bool?, Never> {
+        let api = api
+        let attempt = SendAttempt(timeout: outgoingSendTimeout) { @MainActor [weak self, weak payload] in
+            guard let self, let payload else { return false }
+            guard self.isCurrentSend(payload), self.outgoing[nonce] === payload, payload.confirmed == nil,
+                  payload.alertAuthority?.start() ?? true else { return false }
+            return self.preflight(.send(MessagePayloadFeatures(hasText: !payload.text.isEmpty,
+                isReply: payload.reply != nil, fileCount: payload.files.count)), in: payload.echo.channelID)
+        }
+        payload.timeline.setSendState(nonce: nonce, state: .sending)
+        let task = Task { () -> Bool? in
+            defer { payload.task = nil }
+            guard isCurrentSend(payload), payload.alertAuthority?.start() ?? true else {
+                // Preserve notification's pre-dispatch refusal contract. Only
+                // this account/login may remove an echo that was never sent.
+                if payload.authority.generation == accountGeneration, payload.authority.account == store.me?.id {
+                    outgoing[nonce] = nil
+                    payload.timeline.discardPending(nonce: nonce)
                 }
                 return nil
             }
+            if Task.isCancelled {
+                if payload.alertAuthority != nil {
+                    outgoing[nonce] = nil
+                    payload.timeline.discardPending(nonce: nonce)
+                    return nil
+                }
+                payload.timeline.setSendState(nonce: nonce, state: .notDispatched(CancellationError().localizedDescription))
+                return false
+            }
             do {
-                let sent = try await api.send(channel: channel, content: text, replyTo: reply, pingReply: ping, attachments: files, nonce: nonce)
-                if let authority, !authority.result() { return nil }
-                timeline.confirm(nonce: nonce, with: sent)
-                self.outgoing[nonce] = nil
+                let files = payload.files.map { OutgoingAttachment(filename: $0.filename, data: $0.data, contentType: $0.contentType) }
+                let sent = try await api.send(channel: payload.echo.channelID, content: payload.text, replyTo: payload.reply?.id,
+                                              pingReply: payload.ping, attachments: files, nonce: nonce, attempt: attempt)
+                guard isCurrentSend(payload), payload.alertAuthority?.result() ?? true else { return nil }
+                if payload.confirmed != nil { return true }
+                guard outgoing[nonce] === payload else { return nil }
+                guard sent.channelID == payload.echo.channelID, sent.author.id == payload.authority.account,
+                      sent.nonce == nil || sent.nonce == nonce else { throw DiscordError.decoding("send confirmation identity") }
+                payload.timeline.confirm(nonce: nonce, with: sent)
                 return true
             } catch {
-                if let authority, !authority.result() { return nil }
-                timeline.markFailed(nonce: nonce, error: error.localizedDescription)
+                guard isCurrentSend(payload), payload.alertAuthority?.result() ?? true else { return nil }
+                // An accepted gateway/readback outcome wins even if HTTP later
+                // fails, is cancelled, or returns a malformed response.
+                if payload.confirmed != nil { return true }
+                guard outgoing[nonce] === payload else { return nil }
+                let state: SendState
+                switch attempt.outcome(for: error) {
+                case .notDispatched: state = .notDispatched(error.localizedDescription)
+                case .refused:
+                    let context = OperationContext(operation: .send(MessagePayloadFeatures(hasText: !payload.text.isEmpty,
+                        isReply: payload.reply != nil, fileCount: payload.files.count)), channel: payload.echo.channelID,
+                        author: payload.authority.account, text: payload.text, reply: payload.reply?.id, ping: payload.ping,
+                        files: payload.files.map { OutgoingAttachment(filename: $0.filename, data: $0.data, contentType: $0.contentType) }, nonce: nonce)
+                    let refusal = await attributeRefusal(error, context: context, until: attempt.deadline)
+                    guard isCurrentSend(payload), payload.alertAuthority?.result() ?? true else { return nil }
+                    if payload.confirmed != nil { return true }
+                    guard outgoing[nonce] === payload else { return nil }
+                    payload.refusal = refusal
+                    if let refusal { capabilityFreshness.record(refusal) }
+                    state = .failed(refusal?.explanation ?? error.localizedDescription)
+                case .unknown: state = .unknown(error.localizedDescription)
+                }
+                payload.timeline.setSendState(nonce: nonce, state: state)
                 return false
             }
         }
+        payload.task = task
+        return task
     }
 
-    /// Resends exactly what failed (text, reply, ping and attachments),
-    /// leaving whatever is in the composer now untouched.
-    func retry(_ message: Message) {
-        guard let nonce = message.nonce, let payload = outgoing.removeValue(forKey: nonce) else { return }
-        let channel = message.channelID
-        timeline(for: channel).discardPending(nonce: nonce)
-        let current = drafts[channel]
-        drafts[channel] = Draft(text: payload.text, replyTo: payload.reply, attachments: payload.files)
-        send(in: channel, pingReply: payload.ping)
-        drafts[channel] = current
+    /// Retry is a write only after proven refusal/non-dispatch. Unknown sends
+    /// can check for confirmation, but absence from a page never permits replay.
+    @discardableResult
+    func retry(_ message: Message) -> Task<Bool?, Never>? {
+        guard let nonce = message.nonce, let payload = outgoing[nonce], isCurrentSend(payload),
+              message.channelID == payload.echo.channelID, payload.task == nil,
+              let state = payload.timeline.sendState(for: payload.echo) else { return nil }
+        switch state {
+        case .failed, .notDispatched:
+            return dispatchSend(payload, nonce: nonce)
+        case .unknown:
+            if let task = payload.reconciliation { return task }
+            let api = api, timeout = outgoingReadbackTimeout
+            let task = Task { () -> Bool? in
+                defer { payload.reconciliation = nil }
+                guard isCurrentSend(payload), canReadSendBack(in: payload.echo.channelID) else { return nil }
+                do {
+                    let page = try await SendAttempt(timeout: timeout).run {
+                        try await api.messages(channel: payload.echo.channelID, before: nil, after: nil, around: nil, limit: 100)
+                    }
+                    guard isCurrentSend(payload), !Task.isCancelled else { return nil }
+                    if payload.confirmed != nil { return true }
+                    guard outgoing[nonce] === payload else { return nil }
+                    if let sent = page.first(where: { $0.nonce == nonce && $0.channelID == payload.echo.channelID && $0.author.id == payload.authority.account }) {
+                        payload.timeline.confirm(nonce: nonce, with: sent)
+                        return true
+                    }
+                } catch {
+                    // The original uncertain outcome remains primary.
+                    guard isCurrentSend(payload), !Task.isCancelled else { return nil }
+                }
+                return payload.confirmed == nil ? false : true
+            }
+            payload.reconciliation = task
+            return task
+        case .sending:
+            return nil
+        }
     }
 
-    /// Drops a send that failed (or is still pending); nothing reaches Discord.
+    private func canReadSendBack(in channel: Snowflake) -> Bool {
+        guard let channel = store.channel(channel), store.canView(channel) else { return false }
+        return store.permissions(in: channel) & Permission.readHistory != 0
+    }
+
+    /// Removes only the local echo. Cancellation cannot retract a dispatched
+    /// message; a later server message may still arrive through the gateway.
     func discard(_ message: Message) {
         guard let nonce = message.nonce else { return }
-        outgoing[nonce] = nil
-        timeline(for: message.channelID).discardPending(nonce: nonce)
+        if let payload = outgoing[nonce] {
+            guard payload.echo.channelID == message.channelID else { return }
+            outgoing[nonce] = nil
+            payload.task?.cancel()
+            payload.reconciliation?.cancel()
+            payload.timeline.discardPending(nonce: nonce)
+        } else {
+            // Reconstructed or retired echoes may have no retained payload.
+            messages.existingTimeline(for: message.channelID)?.discardPending(nonce: nonce)
+        }
     }
 
     // MARK: Alert actions
@@ -1073,10 +1220,18 @@ final class AppModel {
         guard let draft = drafts[channel], let message = draft.editing else { return }
         let text = outgoingText(draft, in: channel)
         guard !text.isEmpty else { return }
+        guard preflight(.editMessage, in: channel, messageAuthorID: message.author.id) else { return }
+        let scope = operationScope
+        let feedback = OperationFeedback(OperationContext(operation: .editMessage, channel: channel, message: message.id, author: message.author.id, text: text), model: self)
         cancelEdit(in: channel)
-        guard let request = timeline(for: channel).sendEdit(message.id, content: text, api: api) else { return }
+        guard let request = timeline(for: channel).sendEdit(message.id, content: text, api: api, start: { [weak self] in
+            guard let self, let scope, self.operationScope == scope else { return false }
+            return self.preflight(.editMessage, in: channel, messageAuthorID: message.author.id)
+        }, failure: { [weak self] error in if let self { await feedback.capture(error, model: self) } }) else { return }
         Task {
-            if await request.value == false { showError("Couldn't edit message") }
+            let applied = await request.value
+            guard operationScope == scope else { return }
+            if !applied { feedback.publish("Couldn't edit message", model: self) }
         }
     }
 
@@ -1085,11 +1240,18 @@ final class AppModel {
     func delete(_ message: Message) {
         let timeline = timeline(for: message.channelID)
         if timeline.sendState(for: message) != nil { return discard(message) }
-        guard message.author.id == store.me?.id else { return }
+        guard preflight(.deleteMessage, in: message.channelID, messageAuthorID: message.author.id) else { return }
+        let scope = operationScope
+        let feedback = OperationFeedback(OperationContext(operation: .deleteMessage, channel: message.channelID, message: message.id, author: message.author.id), model: self)
         if drafts[message.channelID]?.editing?.id == message.id { cancelEdit(in: message.channelID) }
-        guard let request = timeline.sendDelete(message.id, api: api) else { return }
+        guard let request = timeline.sendDelete(message.id, api: api, start: { [weak self] in
+            guard let self, let scope, self.operationScope == scope else { return false }
+            return self.preflight(.deleteMessage, in: message.channelID, messageAuthorID: message.author.id)
+        }, failure: { [weak self] error in if let self { await feedback.capture(error, model: self) } }) else { return }
         Task {
-            if await request.value == false { showError("Couldn't delete message") }
+            let applied = await request.value
+            guard operationScope == scope else { return }
+            if !applied { feedback.publish("Couldn't delete message", model: self) }
         }
     }
 
@@ -1115,18 +1277,23 @@ final class AppModel {
             return nil
         }
         let id = message.id, channel = message.channelID
+        let operation: DiscordOperation = pinned ? .pinMessage : .unpinMessage
+        guard preflight(operation, in: channel) else { return nil }
         guard let authority = currentAlertAuthority, let timeline = messages.existingTimeline(for: channel),
               let current = timeline.messages.first(where: { $0.id == id }),
               current.pinned != pinned, timeline.canChangePin(current, store: store) else { return nil }
         let api = api
+        let feedback = OperationFeedback(OperationContext(operation: operation, channel: channel, message: id, author: message.author.id), model: self)
         let sameLogin = { [weak self] in self?.accountGeneration == authority.generation && self?.store.me?.id == authority.account }
         return timeline.sendPin(id, pinned: pinned, api: api, start: { [weak self] in
             guard let self, self.currentAlertAuthority == authority, self.allowsPinWrites,
                   self.messages.existingTimeline(for: channel) === timeline,
                   let row = timeline.messages.first(where: { $0.id == id }) else { return false }
-            return timeline.canChangePin(row, store: self.store)
-        }, result: { [weak self] in self?.currentAlertAuthority == authority }, unwindUnsent: sameLogin, completion: { [weak self] applied in
-            if !applied { self?.showError(pinned ? "Couldn't pin message" : "Couldn't unpin message") }
+            return self.preflight(operation, in: channel) && timeline.canChangePin(row, store: self.store)
+        }, failure: { [weak self] error in if let self { await feedback.capture(error, model: self) } }, result: { [weak self] in self?.currentAlertAuthority == authority }, unwindUnsent: sameLogin, completion: { [weak self] applied in
+            if !applied, let self {
+                feedback.publish(pinned ? "Couldn't pin message" : "Couldn't unpin message", model: self)
+            }
         })
     }
 
@@ -1237,14 +1404,28 @@ final class AppModel {
     /// same reaction); a refused latest toggle puts the reaction back as
     /// Discord has it. Only a reaction that stuck joins Recently Used.
     func react(_ emoji: Emoji, add: Bool, message: Snowflake, channel: Snowflake) {
-        guard let request = timeline(for: channel).sendReaction(emoji, on: message, add: add, api: api) else { return }
+        let timeline = timeline(for: channel)
+        guard timeline.messages.contains(where: { $0.id == message }) else { return }
+        let exists = timeline.hasConfirmedReaction(emoji, on: message)
+        let operation: DiscordOperation = add ? (exists ? .addExistingReaction : .addReaction) : .removeOwnReaction
+        guard preflight(operation, in: channel) else { return }
+        let scope = operationScope
+        let feedback = OperationFeedback(OperationContext(operation: operation, channel: channel, message: message, emoji: emoji), model: self)
+        guard let request = timeline.sendReaction(emoji, on: message, add: add, api: api, start: { [weak self] add, existing in
+            guard let self, let scope, self.operationScope == scope else { return false }
+            return self.preflight(add ? (existing ? .addExistingReaction : .addReaction) : .removeOwnReaction, in: channel)
+        }, failure: { [weak self] error, add, existing in
+            if let self { await feedback.capture(error, model: self, operation: add ? (existing ? .addExistingReaction : .addReaction) : .removeOwnReaction) }
+        }) else { return }
         Task {
-            switch await request.value {
+            let outcome = await request.value
+            guard operationScope == scope else { return }
+            switch outcome {
             case .applied:
                 if add { settings.noteRecent(emoji) }
             case .failed:
                 // The pill has already gone back; say why it moved.
-                showError(add ? "Couldn't add reaction" : "Couldn't remove reaction")
+                feedback.publish(add ? "Couldn't add reaction" : "Couldn't remove reaction", model: self)
             case .superseded:
                 break
             }

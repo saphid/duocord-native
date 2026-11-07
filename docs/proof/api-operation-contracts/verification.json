@@ -1,0 +1,23 @@
+{
+  "full": {
+    "total": 825,
+    "passed": 820,
+    "failed": 3,
+    "skipped": 2,
+    "exit": 65
+  },
+  "known_layout_assertions": 8,
+  "all_remaining_failure_messages_reproduced_by_prior_base": true,
+  "prior_base": "59bcd5b7b2788b6d5e53486d4ff0989d294d6ee1",
+  "comparison": "current failed assertion multiset is subset of recorded unchanged-base layout run",
+  "skips": [
+    "DuoLayoutTests/testChannelRowsKeepTouchTargetsAtLargerText()",
+    "DuoLayoutTests/testIPadSidebarKeepsHomeBelowNativeHeader()"
+  ],
+  "skip_reason": "iPad-only on iPhone 17 Pro",
+  "pin_suite": {
+    "passed": 22,
+    "failed": 0
+  },
+  "post_479_change": "Only legacy pin feedback assertions updated; no production/project changes"
+}

@@ -3,6 +3,17 @@ import Observation
 import os
 
 nonisolated enum Permission {
+    static let manageChannels: UInt64 = 1 << 4
+    static let addReactions: UInt64 = 1 << 6
+    static let manageMessages: UInt64 = 1 << 13
+    static let embedLinks: UInt64 = 1 << 14
+    static let attachFiles: UInt64 = 1 << 15
+    static let sendPolls: UInt64 = 1 << 49
+    static let sendPayload: UInt64 = (1 << 12) | embedLinks | attachFiles | mentionEveryone | (1 << 46) | sendPolls
+    static let voiceScoped: UInt64 = (1 << 8) | (1 << 9) | (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24) | (1 << 25) | (1 << 32) | (1 << 39)
+    static let channelScoped: UInt64 = (1 << 0) | manageChannels | addReactions | voiceScoped | viewChannel | sendMessages
+        | manageMessages | sendPayload | readHistory | (1 << 18) | connect | (1 << 29) | (1 << 31)
+        | manageThreads | (1 << 35) | (1 << 36) | (1 << 37) | sendInThreads | (1 << 45) | pinMessages
     static let administrator: UInt64 = 1 << 3
     static let viewChannel: UInt64 = 1 << 10
     static let sendMessages: UInt64 = 1 << 11
@@ -44,7 +55,10 @@ struct MemberListState {
 final class DiscordStore {
     private(set) var me: User?
     private(set) var guilds: [Snowflake: Guild] = [:] {
-        didSet { derivedRevision &+= 1 }
+        didSet {
+            derivedRevision &+= 1
+            for id in Set(oldValue.keys).union(guilds.keys) where oldValue[id] != guilds[id] { guildFactVersions[id, default: 0] &+= 1 }
+        }
     }
     private(set) var guildOrder: [Snowflake] = []
     private(set) var folders: [GuildFolder] = []
@@ -209,7 +223,10 @@ final class DiscordStore {
     }
 
     private(set) var myMembers: [Snowflake: Member] = [:] {
-        didSet { derivedRevision &+= 1 }
+        didSet {
+            derivedRevision &+= 1
+            for id in Set(oldValue.keys).union(myMembers.keys) where oldValue[id] != myMembers[id] { memberFactVersions[id, default: 0] &+= 1 }
+        }
     }
     @ObservationIgnored private(set) var members: [Snowflake: [Snowflake: Member]] = [:]
     private(set) var readStates: [Snowflake: ReadState] = [:] {
@@ -248,6 +265,8 @@ final class DiscordStore {
     private func resetReadOperations() {
         onReadReset?()
         readEpoch = UUID()
+        deletedFactChannels = []; deletedFactGuilds = []
+        guildFactVersions = [:]; memberFactVersions = [:]
         readEchoes = [:]; readServerVersions = [:]; readServerFloor = nil
         readWriteSequence = 0; confirmedReadSequences = [:]; localReadProgress = [:]
         manualUnreadChannels = []; pendingReadChannels = []; pendingUnreadChannels = []; readIntents = [:]; readVersions = [:]
@@ -400,6 +419,7 @@ final class DiscordStore {
     private(set) var joinedThreads: Set<Snowflake> = [] {
         didSet { derivedRevision &+= 1 }
     }
+    private(set) var knownAbsentThreadMemberships: Set<Snowflake> = []
     /// Changes when a member search (op 8) answers, since `members` itself isn't observed.
     private(set) var memberSearchRevision = 0
 
@@ -411,6 +431,85 @@ final class DiscordStore {
     @ObservationIgnored var onMessageCreate: ((Message) -> Void)?
 
     // MARK: Lookups
+
+    struct FactSnapshot {
+        let epoch: UUID
+        let channelRevision: Int
+        let guilds: [Snowflake: UInt64]
+        let members: [Snowflake: UInt64]
+    }
+    @ObservationIgnored private var guildFactVersions: [Snowflake: UInt64] = [:]
+    @ObservationIgnored private var memberFactVersions: [Snowflake: UInt64] = [:]
+    @ObservationIgnored private var deletedFactChannels: Set<Snowflake> = []
+    @ObservationIgnored private var deletedFactGuilds: Set<Snowflake> = []
+
+    /// Capture before the first read, including facts whose IDs that read may discover.
+    func factSnapshot() -> FactSnapshot {
+        FactSnapshot(epoch: readEpoch, channelRevision: channelRevision, guilds: guildFactVersions, members: memberFactVersions)
+    }
+    func canRefreshChannel(_ id: Snowflake, snapshot: FactSnapshot) -> Bool {
+        readEpoch == snapshot.epoch && !deletedFactChannels.contains(id)
+            && !channelChanged(id, since: snapshot.channelRevision)
+    }
+    @discardableResult
+    func commitFactChannel(_ channel: Channel, snapshot: FactSnapshot) -> Bool {
+        guard canRefreshChannel(channel.id, snapshot: snapshot),
+              channel.guildID.map({ !deletedFactGuilds.contains($0) }) ?? channel.type.isPrivate else { return false }
+        upsert(channel: channel)
+        return true
+    }
+    @discardableResult
+    func commitFactGuild(_ guild: Guild, snapshot: FactSnapshot) -> Bool {
+        guard readEpoch == snapshot.epoch, !deletedFactGuilds.contains(guild.id),
+              guildFactVersions[guild.id, default: 0] == snapshot.guilds[guild.id, default: 0] else { return false }
+        // A guild read never replaces channel, role or member event state.
+        if var current = guilds[guild.id] { current.ownerID = guild.ownerID; current.unavailable = guild.unavailable; guilds[guild.id] = current }
+        else { var minimal = Guild(id: guild.id, name: guild.name); minimal.ownerID = guild.ownerID; minimal.unavailable = guild.unavailable; guilds[guild.id] = minimal }
+        return true
+    }
+    @discardableResult
+    func commitFactRoles(_ roles: [Role], guild: Snowflake, snapshot: FactSnapshot) -> Bool {
+        guard readEpoch == snapshot.epoch, !deletedFactGuilds.contains(guild),
+              guildFactVersions[guild, default: 0] == snapshot.guilds[guild, default: 0], guilds[guild] != nil else { return false }
+        guilds[guild]?.roles = roles
+        return true
+    }
+    @discardableResult
+    func commitFactMember(_ member: Member, guild: Snowflake, snapshot: FactSnapshot) -> Bool {
+        guard readEpoch == snapshot.epoch, !deletedFactGuilds.contains(guild), member.userID == me?.id,
+              memberFactVersions[guild, default: 0] == snapshot.members[guild, default: 0] else { return false }
+        myMembers[guild] = member
+        return true
+    }
+    @discardableResult
+    func commitFactMembership(_ member: ThreadMemberRef, thread: Snowflake, snapshot: FactSnapshot) -> Bool {
+        guard canRefreshChannel(thread, snapshot: snapshot), channels[thread] != nil else { return false }
+        changedChannel(thread)
+        channels[thread]?.member = member
+        joinedThreads.insert(thread); knownAbsentThreadMemberships.remove(thread)
+        return true
+    }
+
+    @discardableResult
+    func commitFactAbsentMembership(thread: Snowflake, snapshot: FactSnapshot) -> Bool {
+        guard canRefreshChannel(thread, snapshot: snapshot), channels[thread] != nil else { return false }
+        setThreadMembership(thread, joined: false)
+        return true
+    }
+
+    private func rememberGatewayMember(_ member: Member, guild: Snowflake) {
+        guard let id = member.userID ?? member.user?.id else { return }
+        if id == me?.id {
+            memberFactVersions[guild, default: 0] &+= 1
+            var copy = member
+            copy.userID = id
+            if let known = myMembers[guild] {
+                if !copy.rolesKnown { copy.roles = known.roles; copy.rolesKnown = known.rolesKnown }
+                if copy.communicationDisabledUntil == nil { copy.communicationDisabledUntil = known.communicationDisabledUntil }
+            }
+            myMembers[guild] = copy
+        } else { members[guild, default: [:]][id] = member }
+    }
 
     func channel(_ id: Snowflake) -> Channel? { channels[id] }
 
@@ -486,7 +585,7 @@ final class DiscordStore {
         // Missing-parent threads still explain their activity in the sidebar.
         // Only metadata is shown until opening resolves the parent's permissions.
         let unresolved = channelIDs(in: guildID).compactMap { channels[$0] }
-            .filter { isUnresolvedThread($0) && canView($0) }.sorted(by: Self.threadOrder)
+            .filter { canShowUnresolvedThreadMetadata($0) }.sorted(by: Self.threadOrder)
         let uncategorized = visible.filter { $0.parentID == nil && $0.type != .category }.sorted(by: sorted) + unresolved
         if !uncategorized.isEmpty { result.append(ChannelSection(category: nil, channels: uncategorized)) }
         for category in categories {
@@ -671,46 +770,54 @@ final class DiscordStore {
 
     // MARK: Permissions
 
+    /// Compatibility bitset. Unknown facts map to zero; callers needing a
+    /// reason or refresh decision must use permissionResolution instead.
     func permissions(in channel: Channel) -> UInt64 {
-        guard let guildID = channel.guildID, let guild = guilds[guildID], let me else { return Permission.all }
-        if guild.ownerID == me.id { return Permission.all }
-        // Threads inherit their parent's permissions.
-        if channel.type.isThread, let parent = channel.parentID.flatMap({ channels[$0] }) {
-            return permissions(in: parent)
-        }
-        let myRoles = Set(myMembers[guildID]?.roles ?? [])
-        var base: UInt64 = 0
-        for role in guild.roles where role.id == guildID || myRoles.contains(role.id) {
-            base |= UInt64(role.permissions) ?? 0
-        }
-        if base & Permission.administrator != 0 { return Permission.all }
-        var perms = base
-        let overwrites = channel.permissionOverwrites ?? []
-        if let everyone = overwrites.first(where: { $0.id == guildID }) {
-            perms &= ~(UInt64(everyone.deny) ?? 0)
-            perms |= UInt64(everyone.allow) ?? 0
-        }
-        var allow: UInt64 = 0, deny: UInt64 = 0
-        for overwrite in overwrites where overwrite.type == 0 && myRoles.contains(overwrite.id) {
-            allow |= UInt64(overwrite.allow) ?? 0
-            deny |= UInt64(overwrite.deny) ?? 0
-        }
-        perms = (perms & ~deny) | allow
-        if let mine = overwrites.first(where: { $0.type == 1 && $0.id == me.id }) {
-            perms = (perms & ~(UInt64(mine.deny) ?? 0)) | (UInt64(mine.allow) ?? 0)
-        }
-        return perms
+        permissionResolution(in: channel).permissions ?? 0
+    }
+
+    func capabilityContext(in channel: Channel, now: Date = Date(),
+                           slowmodeHistory: SlowmodeHistory = .unknown,
+                           messageAuthorID: Snowflake? = nil) -> CapabilityContext {
+        let membership: ThreadMembership = joinedThreads.contains(channel.id) ? .joined
+            : knownAbsentThreadMemberships.contains(channel.id) || channel.type != .privateThread ? .notJoined : .unknown
+        return CapabilityContext(channel: channel, account: me,
+                                 guild: channel.guildID.flatMap { guilds[$0] },
+                                 member: channel.guildID.flatMap { myMembers[$0] },
+                                 parent: channel.parentID.flatMap { channels[$0] }, membership: membership,
+                                 messageAuthorID: messageAuthorID, accountKind: me?.bot == true ? .bot : .human,
+                                 slowmodeHistory: slowmodeHistory, now: now)
+    }
+
+    func permissionResolution(in channel: Channel, now: Date = Date()) -> PermissionResolution {
+        CapabilityResolver.permissions(capabilityContext(in: channel, now: now))
+    }
+
+    func capability(_ operation: DiscordOperation, in channel: Channel, now: Date = Date(),
+                    slowmodeHistory: SlowmodeHistory = .unknown,
+                    messageAuthorID: Snowflake? = nil) -> CapabilityDecision {
+        operation.evaluate(capabilityContext(in: channel, now: now, slowmodeHistory: slowmodeHistory,
+                                            messageAuthorID: messageAuthorID))
     }
 
     func canView(_ channel: Channel) -> Bool {
-        if channel.type == .category { return true }
-        if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id),
-           permissions(in: channel) & Permission.manageThreads == 0 { return false }
-        return permissions(in: channel) & Permission.viewChannel != 0
+        capability(.viewChannel, in: channel).isAllowed
     }
 
     func isUnresolvedThread(_ channel: Channel) -> Bool {
         channel.type.isThread && channel.parentID.flatMap { channels[$0] } == nil
+    }
+
+    /// Metadata already received from Discord may explain unresolved activity
+    /// in the sidebar. This coarse guild-role check grants no history access;
+    /// canView and operation capabilities still require the real parent.
+    private func canShowUnresolvedThreadMetadata(_ channel: Channel) -> Bool {
+        guard isUnresolvedThread(channel) else { return false }
+        if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id) { return false }
+        var metadata = channel
+        metadata.type = .text
+        metadata.permissionOverwrites = []
+        return capability(.viewChannel, in: metadata).isAllowed
     }
 
     /// @everyone, @here and every role (not just mentionable ones) ping.
@@ -725,22 +832,18 @@ final class DiscordStore {
         return roles.filter { $0.id != guild && ($0.mentionable || all) }.sorted { $0.position > $1.position }
     }
 
+    /// An affordance adapter, not dispatch authorization. Unknown slowmode
+    /// facts alone keep drafting available; the full decision retains unknown.
     func canSend(in channel: Channel) -> Bool {
-        guard canView(channel) else { return false }
-        if channel.type.isThread, channel.threadMetadata?.archived == true || channel.threadMetadata?.locked == true { return false }
-        let perms = permissions(in: channel)
-        // Private threads require membership, ownership or thread management.
-        if channel.type == .privateThread, channel.ownerID != me?.id, !joinedThreads.contains(channel.id),
-           perms & Permission.manageThreads == 0 { return false }
-        return perms & (channel.type.isThread ? Permission.sendInThreads : Permission.sendMessages) != 0
+        let decision = capability(.send(MessagePayloadFeatures()), in: channel)
+        return decision.isAllowed || (decision.state == .unknown && !decision.reasons.isEmpty
+            && decision.reasons.allSatisfy { $0 == .missing(.slowmodeConfiguration) || $0 == .missing(.slowmodeHistory) })
     }
 
-    /// Pin Messages (not Manage Messages) where you can see the channel; an
-    /// archived or locked thread takes no changes. DMs have no permissions to check.
     func canPin(in channel: Channel) -> Bool {
-        guard canView(channel) else { return false }
-        if channel.type.isThread, channel.threadMetadata?.archived == true || channel.threadMetadata?.locked == true { return false }
-        return permissions(in: channel) & Permission.pinMessages != 0
+        let decision = capability(.pinMessage, in: channel)
+        return decision.isAllowed || (decision.state == .unknown && !decision.reasons.isEmpty
+            && decision.reasons.allSatisfy { if case .accountValidationRequired = $0 { true } else { false } })
     }
 
     // MARK: Pins
@@ -977,7 +1080,7 @@ final class DiscordStore {
         settingsVersions = [:]
         me = nil; guilds = [:]; guildOrder = []; folders = []; channels = [:]; privateChannelOrder = []
         users = [:]; myMembers = [:]; members = [:]; readStates = [:]; guildSettings = [:]; voiceStates = [:]
-        typing = [:]; memberLists = [:]; presences = [:]; isReady = false; joinedThreads = []
+        typing = [:]; memberLists = [:]; presences = [:]; isReady = false; joinedThreads = []; knownAbsentThreadMemberships = []
     }
 
     /// Draws the last known state before the gateway connects. READY replaces it.
@@ -986,6 +1089,8 @@ final class DiscordStore {
         resetPeople()
         resetReadOperations()
         resetPins()
+        joinedThreads = Set(snapshot.channels.filter { $0.member != nil }.map(\.id))
+        knownAbsentThreadMemberships = []
         settingsSnapshotVersion &+= 1
         settingsVersions = [:]
         me = snapshot.me
@@ -1045,6 +1150,7 @@ final class DiscordStore {
         for entry in ready.guildSettings { settings[entry.guildID ?? 0] = entry }
 
         self.me = ready.user
+        self.knownAbsentThreadMemberships = []
         self.joinedThreads = joined
         self.users = users
         for relationship in ready.relationships { applyRelationship(relationship) }
@@ -1068,7 +1174,7 @@ final class DiscordStore {
     func apply(supplemental: ReadySupplemental) {
         let order = guildOrder
         for (index, list) in supplemental.mergedMembers.enumerated() where index < order.count {
-            if let me, let mine = list.first(where: { $0.userID == me.id }) { myMembers[order[index]] = mine }
+            if let me, let mine = list.first(where: { $0.userID == me.id }) { memberFactVersions[order[index], default: 0] &+= 1; myMembers[order[index]] = mine }
         }
         var presences = self.presences
         for presence in supplemental.friendPresences {
@@ -1085,12 +1191,15 @@ final class DiscordStore {
     }
 
     func upsert(guild: Guild) {
+        deletedFactGuilds.remove(guild.id)
+        guildFactVersions[guild.id, default: 0] &+= 1
         var copy = guild
         if copy.defaultMessageNotifications == nil {
             copy.defaultMessageNotifications = guilds[guild.id]?.defaultMessageNotifications
         }
-        for channel in guild.channels { changedChannel(channel.id); channels[channel.id] = channel }
+        for channel in guild.channels { deletedFactChannels.remove(channel.id); changedChannel(channel.id); channels[channel.id] = channel }
         for thread in guild.threads {
+            deletedFactChannels.remove(thread.id)
             changedChannel(thread.id)
             channels[thread.id] = thread
             if thread.member != nil { joinedThreads.insert(thread.id) }
@@ -1105,10 +1214,22 @@ final class DiscordStore {
     }
 
     func upsert(channel: Channel) {
+        deletedFactChannels.remove(channel.id)
         changedChannel(channel.id)
         var channel = channel
         // Updates omit fields the list relies on; keep the known ones.
         if let existing = channels[channel.id] {
+            if channel.type.isThread, channel.parentID == nil { channel.parentID = existing.parentID }
+            if channel.ownerID == nil { channel.ownerID = existing.ownerID }
+            if channel.permissionOverwrites == nil { channel.permissionOverwrites = existing.permissionOverwrites }
+            if channel.rateLimitPerUser == nil { channel.rateLimitPerUser = existing.rateLimitPerUser }
+            if var metadata = channel.threadMetadata {
+                if metadata.archived == nil { metadata.archived = existing.threadMetadata?.archived }
+                if metadata.locked == nil { metadata.locked = existing.threadMetadata?.locked }
+                if metadata.archiveTimestamp == nil { metadata.archiveTimestamp = existing.threadMetadata?.archiveTimestamp }
+                if metadata.createTimestamp == nil { metadata.createTimestamp = existing.threadMetadata?.createTimestamp }
+                channel.threadMetadata = metadata
+            } else { channel.threadMetadata = existing.threadMetadata }
             if channel.lastMessageID == nil { channel.lastMessageID = existing.lastMessageID }
             if channel.recipients == nil { channel.recipients = existing.recipients }
             if channel.recipientIDs == nil { channel.recipientIDs = existing.recipientIDs }
@@ -1131,8 +1252,10 @@ final class DiscordStore {
     /// A confirmed join or leave. Leaving also forgets the READY membership
     /// record, so the thread never reads as joined again from stale data.
     func setThreadMembership(_ id: Snowflake, joined: Bool) {
+        changedChannel(id)
         if joined { recordThreadMembership(id, joinedAt: nil); return }
         joinedThreads.remove(id)
+        knownAbsentThreadMemberships.insert(id)
         if var thread = channels[id], thread.member != nil {
             changedChannel(id)
             thread.member = nil
@@ -1142,11 +1265,13 @@ final class DiscordStore {
 
     /// A channel or thread that no longer exists (confirmed delete or gateway).
     func removeChannel(_ id: Snowflake) {
+        deletedFactChannels.insert(id)
         changedChannel(id)
         if let channel = channels[id], channel.type == .dm {
             for user in channel.recipients.map({ $0.map(\.id) }) ?? channel.recipientIDs ?? [] { dmVersions[user, default: 0] &+= 1 }
         }
         channels[id] = nil
+        knownAbsentThreadMemberships.remove(id)
         joinedThreads.remove(id)
         sortPrivateChannels()
     }
@@ -1162,7 +1287,9 @@ final class DiscordStore {
     /// Notification settings the event carried are authoritative (gateway).
     private func recordThreadMembership(_ id: Snowflake, joinedAt stamp: String?,
                                         settings: ThreadMemberSettingsUpdate = ThreadMemberSettingsUpdate()) {
+        changedChannel(id)
         joinedThreads.insert(id)
+        knownAbsentThreadMemberships.remove(id)
         guard var thread = channels[id] else { return }
         var member = thread.member ?? ThreadMemberRef(joinTimestamp: nil)
         member.joinTimestamp = stamp ?? member.joinTimestamp
@@ -1247,9 +1374,11 @@ final class DiscordStore {
                     var iconWasProvided: Bool
                     var roles: [Role]?
                     var properties: GuildProperties?
+                    var ownerID: Snowflake?
                     var defaultMessageNotifications: Int?
                     enum CodingKeys: String, CodingKey {
                         case id, name, icon, roles, properties
+                        case ownerID = "owner_id"
                         case defaultMessageNotifications = "default_message_notifications"
                     }
                     init(from decoder: Decoder) throws {
@@ -1260,14 +1389,17 @@ final class DiscordStore {
                         icon = try c.decodeIfPresent(String.self, forKey: .icon)
                         roles = try c.decodeIfPresent([Role].self, forKey: .roles)
                         properties = try c.decodeIfPresent(GuildProperties.self, forKey: .properties)
+                        ownerID = try c.decodeIfPresent(Snowflake.self, forKey: .ownerID) ?? properties?.ownerID
                         defaultMessageNotifications = try c.decodeIfPresent(Int.self, forKey: .defaultMessageNotifications)
                     }
                 }
                 let update = try dispatch.decode(Update.self)
+                guildFactVersions[update.id, default: 0] &+= 1
                 if var guild = guilds[update.id] {
                     if let name = update.name { guild.name = name }
                     if update.iconWasProvided { guild.icon = update.icon }
                     if let roles = update.roles { guild.roles = roles }
+                    if let owner = update.ownerID { guild.ownerID = owner }
                     if let level = update.defaultMessageNotifications ?? update.properties?.defaultMessageNotifications {
                         guild.defaultMessageNotifications = level
                     }
@@ -1275,7 +1407,11 @@ final class DiscordStore {
                 }
             case "GUILD_DELETE":
                 let deleted = try dispatch.decode(GuildDelete.self)
+                guildFactVersions[deleted.id, default: 0] &+= 1
+                if deleted.unavailable == true { guilds[deleted.id]?.unavailable = true }
                 if deleted.unavailable != true {
+                    deletedFactGuilds.insert(deleted.id)
+                    myMembers[deleted.id] = nil
                     guilds[deleted.id] = nil
                     guildOrder.removeAll { $0 == deleted.id }
                     for channel in channels.values where channel.guildID == deleted.id { changedChannel(channel.id) }
@@ -1283,6 +1419,7 @@ final class DiscordStore {
                 }
             case "GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE":
                 let event = try dispatch.decode(GuildRoleEvent.self)
+                guildFactVersions[event.guildID, default: 0] &+= 1
                 if let role = event.role, var guild = guilds[event.guildID] {
                     guild.roles.removeAll { $0.id == role.id }
                     guild.roles.append(role)
@@ -1290,12 +1427,18 @@ final class DiscordStore {
                 }
             case "GUILD_ROLE_DELETE":
                 let event = try dispatch.decode(GuildRoleEvent.self)
+                guildFactVersions[event.guildID, default: 0] &+= 1
                 if let id = event.roleID { guilds[event.guildID]?.roles.removeAll { $0.id == id } }
-            case "GUILD_MEMBER_UPDATE":
+            case "GUILD_MEMBER_ADD", "GUILD_MEMBER_UPDATE":
                 let update = try dispatch.decode(GuildMemberUpdate.self)
-                let member = Member(user: update.user, nick: update.nick, roles: update.roles)
-                if update.user.id == me?.id { myMembers[update.guildID] = member }
+                let member = update.applying(to: member(update.user.id, in: update.guildID))
+                if update.user.id == me?.id { memberFactVersions[update.guildID, default: 0] &+= 1; myMembers[update.guildID] = member }
                 else { members[update.guildID, default: [:]][update.user.id] = member }
+            case "GUILD_MEMBER_REMOVE":
+                struct Removed: Decodable { var guild_id: Snowflake; var user: User }
+                let removed = try dispatch.decode(Removed.self)
+                if removed.user.id == me?.id { memberFactVersions[removed.guild_id, default: 0] &+= 1; myMembers[removed.guild_id] = nil }
+                else { members[removed.guild_id]?[removed.user.id] = nil }
             case "CHANNEL_CREATE", "CHANNEL_UPDATE", "THREAD_CREATE", "THREAD_UPDATE":
                 upsert(channel: try dispatch.decode(Channel.self))
             case "CHANNEL_DELETE", "THREAD_DELETE":
@@ -1346,7 +1489,7 @@ final class DiscordStore {
                 let event = try dispatch.decode(TypingStart.self)
                 typing[event.channelID, default: [:]][event.userID] = .now
                 if let member = event.member, let guild = event.guildID, let user = member.user {
-                    members[guild, default: [:]][user.id] = member
+                    rememberGatewayMember(member, guild: guild)
                     users[user.id] = user
                 }
                 pruneTypingSoon(event.channelID)
@@ -1357,7 +1500,7 @@ final class DiscordStore {
                 else { voiceStates[guild, default: [:]][state.userID] = state }
                 if let member = state.member, let user = member.user {
                     users[user.id] = user
-                    if let guildID = state.guildID, user.id != me?.id { members[guildID, default: [:]][user.id] = member }
+                    if let guildID = state.guildID { rememberGatewayMember(member, guild: guildID) }
                 }
             case "USER_GUILD_SETTINGS_UPDATE":
                 let update = try dispatch.decode(GuildSettingsUpdate.self)
@@ -1386,7 +1529,7 @@ final class DiscordStore {
                 for member in chunk.members {
                     guard let user = member.user else { continue }
                     users[user.id] = user
-                    if user.id != me?.id { members[chunk.guild_id, default: [:]][user.id] = member }
+                    rememberGatewayMember(member, guild: chunk.guild_id)
                 }
                 memberSearchRevision += 1
             default:
@@ -1406,11 +1549,11 @@ final class DiscordStore {
             if channel.type.isPrivate { sortPrivateChannels() }
         }
         typing[message.channelID]?[message.author.id] = nil
-        if let guild = message.guildID, let member = message.member, message.author.id != me?.id {
+        if let guild = message.guildID, let member = message.member {
             var copy = member
             copy.user = message.author
             copy.userID = message.author.id
-            members[guild, default: [:]][message.author.id] = copy
+            rememberGatewayMember(copy, guild: guild)
         }
         users[message.author.id] = message.author
         for user in message.mentions where users[user.id] == nil { users[user.id] = user }
@@ -1502,7 +1645,7 @@ final class DiscordStore {
             case .member(let member, let status):
                 if let user = member.user {
                     users[user.id] = user
-                    members[update.guildID, default: [:]][user.id] = member
+                    rememberGatewayMember(member, guild: update.guildID)
                     presences[user.id] = status
                 }
                 return .member(member, status)

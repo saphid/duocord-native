@@ -831,7 +831,7 @@ final class NotificationAlertActionTests: XCTestCase {
         center.records = [record(50)]
         model.drafts[chat] = Draft(text: "keep me", replyTo: message(40))
         let before = model.drafts[chat]
-        mock.beforeSend = { _ in throw DiscordError.http(500, "offline refused") }
+        mock.beforeSend = { _ in throw DiscordError.http(403, "offline refused") }
         let outcome = await service.handle(response(reply, text: "retry me"))
         XCTAssertEqual(outcome, .sendFailed)
         let timeline = model.timeline(for: chat)
@@ -849,7 +849,7 @@ final class NotificationAlertActionTests: XCTestCase {
         await settle()
         XCTAssertEqual(mock.sent, [MockDiscord.SentRecord(channel: chat, content: "retry me", replyTo: nil, pingReply: model.pingReplies)])
         XCTAssertEqual(model.drafts[chat], before)
-        mock.beforeSend = { _ in throw DiscordError.http(500, "offline refused") }
+        mock.beforeSend = { _ in throw DiscordError.http(403, "offline refused") }
         let second = await service.handle(response(reply, text: "discard me"))
         XCTAssertEqual(second, .sendFailed)
         let discarded = try XCTUnwrap(timeline.messages.last)

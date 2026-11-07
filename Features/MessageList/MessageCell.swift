@@ -1051,20 +1051,23 @@ final class MessageCell: UICollectionViewCell {
             case .sending:
                 statusLabel.text = "Sending…"
                 statusLabel.textColor = Theme.textMuted
-            case .failed(let error):
-                statusLabel.text = "Couldn't send · Tap to retry or delete"
+            case .failed(let error), .notDispatched(let error), .unknown(let error):
+                let uncertain: Bool
+                if case .unknown = state { uncertain = true } else { uncertain = false }
+                let recovery = state.recoveryTitle ?? "Check Delivery"
+                statusLabel.text = uncertain ? "Delivery unknown · Tap to check" : "Couldn't send · Tap to retry"
                 statusLabel.textColor = Theme.unread
                 // The whole line opens the choice; the menu's title says why it failed.
                 statusButton.isHidden = false
                 statusButton.frame = frame.insetBy(dx: 0, dy: min(0, (frame.height - 44) / 2))
-                statusButton.accessibilityLabel = "Couldn't send: \(error). Retry or delete"
+                statusButton.accessibilityLabel = uncertain ? "Delivery unknown: \(error). Check delivery or remove local echo" : "Couldn't send: \(error). Retry or remove local echo"
                 let id = message.id
                 statusButton.menu = UIMenu(title: error, children: [
-                    UIAction(title: "Retry Send", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                    UIAction(title: recovery, image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
                         guard let self else { return }
                         self.delegate?.messageCell(self, retry: id)
                     },
-                    UIAction(title: "Delete Message", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                    UIAction(title: "Remove Local Echo", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                         guard let self else { return }
                         self.delegate?.messageCell(self, discard: id)
                     },

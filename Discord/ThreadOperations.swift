@@ -107,6 +107,44 @@ nonisolated struct ThreadCapabilities: Equatable, Sendable {
         return result
     }
 
+    /// The operation layer extends these established thread rules rather than
+    /// maintaining another creator/archive policy. Unknown facts stay explicit.
+    static func decision(_ action: ThreadAction, context: CapabilityContext,
+                         permissions: PermissionResolution) -> CapabilityDecision {
+        let thread = context.channel
+        guard thread.type.isThread else { return .denied(.unsupportedChannel(thread.type), .threadPolicy) }
+        guard let me = context.account?.id else { return .unknown(.account) }
+        let visibility = permissions.requiring(Permission.viewChannel)
+        guard visibility.isAllowed, let bits = permissions.permissions else { return visibility }
+        if action != .delete, thread.threadMetadata?.archived == nil || thread.threadMetadata?.locked == nil {
+            return .unknown(.threadState)
+        }
+        if (action == .join || action == .leave), context.membership == .unknown { return .unknown(.membership) }
+        if bits & Permission.manageThreads == 0, thread.ownerID == nil {
+            switch action {
+            case .rename, .close, .reopen: return .unknown(.ownership)
+            default: break
+            }
+        }
+        if case .rename(let name) = action, ThreadPatch.validName(name) == nil { return .denied(.invalidPayload, .payload) }
+        let known = evaluate(thread: thread, me: me, permissions: bits, canView: true, joined: context.membership == .joined)
+        return known.allows(action) ? CapabilityDecision(state: .allowed, provenance: [.threadPolicy])
+            : .denied(.threadActionUnavailable, .threadPolicy)
+    }
+
+    static func evaluate(context: CapabilityContext) -> ThreadCapabilities {
+        var result = ThreadCapabilities()
+        result.canJoin = DiscordOperation.thread(.join).evaluate(context).isAllowed
+        result.canLeave = DiscordOperation.thread(.leave).evaluate(context).isAllowed
+        result.canRename = DiscordOperation.thread(.rename(context.channel.name ?? "thread")).evaluate(context).isAllowed
+        result.canClose = DiscordOperation.thread(.close).evaluate(context).isAllowed
+        result.canReopen = DiscordOperation.thread(.reopen).evaluate(context).isAllowed
+        result.canLock = DiscordOperation.thread(.lock).evaluate(context).isAllowed
+        result.canUnlock = DiscordOperation.thread(.unlock).evaluate(context).isAllowed
+        result.canDelete = DiscordOperation.thread(.delete).evaluate(context).isAllowed
+        return result
+    }
+
     func allows(_ action: ThreadAction) -> Bool {
         switch action {
         case .join: canJoin
@@ -125,8 +163,7 @@ extension DiscordStore {
     func isJoined(thread id: Snowflake) -> Bool { joinedThreads.contains(id) }
 
     func threadCapabilities(_ thread: Channel) -> ThreadCapabilities {
-        ThreadCapabilities.evaluate(thread: thread, me: me?.id, permissions: permissions(in: thread),
-                                    canView: canView(thread), joined: isJoined(thread: thread.id))
+        ThreadCapabilities.evaluate(context: capabilityContext(in: thread))
     }
 
     /// `https://discord.com/channels/<guild>/<thread>`, as Discord's Copy Link.

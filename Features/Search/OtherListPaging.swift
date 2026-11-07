@@ -240,6 +240,11 @@ extension OtherListConsumers {
                         channel: Snowflake, store: DiscordStore, isCurrent: @escaping @MainActor () -> Bool,
                         fetch: (@MainActor (String?) async throws -> PinPage)? = nil) -> Task<Void, Never> {
         owner.start(input, load: { before in
+            guard let current = store.channel(channel) else { throw CapabilityPreflightRefusal() }
+            let decision = store.capability(.listPins, in: current)
+            guard decision.isAllowed else {
+                throw PinListCapabilityError(message: decision.explanation(at: .now) ?? "Pins are unavailable in this channel.")
+            }
             let page: PinPage
             if let fetch { page = try await fetch(before) }
             else { page = try await api.pinPage(channel: channel, before: before, limit: 50) }
@@ -369,4 +374,9 @@ enum OtherListPages {
         }
         return OtherListPage(rows: rows, consumed: page.threads.count, next: next, hasMore: page.hasMore, problem: problem)
     }
+}
+
+private struct PinListCapabilityError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }

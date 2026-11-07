@@ -304,7 +304,8 @@ final class ThreadSidebarTests: XCTestCase {
         mock.failNextThreadWrite = true
         await model.perform(.close, on: F.hinge).value
         XCTAssertEqual(model.store.channel(F.hinge)?.threadMetadata?.archived, false)
-        XCTAssertTrue(model.toast?.text.hasPrefix("Couldn’t close the thread.") == true)
+        XCTAssertTrue(model.toast?.text.contains("Missing Permissions") == true)
+        XCTAssertEqual(model.capabilityFreshness.lastRefusal?.original.httpStatus, 403)
         XCTAssertFalse(model.threads.isSaving(F.hinge))
         mock.failNextThreadWrite = true
         await model.perform(.delete, on: F.hinge).value
