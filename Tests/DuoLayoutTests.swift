@@ -66,6 +66,42 @@ final class DuoLayoutTests: XCTestCase {
         return found
     }
 
+    private func messageController(in root: UIViewController) -> MessageListController? {
+        if let list = root as? MessageListController { return list }
+        return root.children.lazy.compactMap { self.messageController(in: $0) }.first
+    }
+
+    /// Native scroll input can start outside the collection view, such as in
+    /// the system's bar. Its delegate lifecycle must release the latest pin
+    /// before an offset or layout callback, without depending on isTracking.
+    func testNativeScrollLifecycleCanLeaveLatestAndResumeFollowing() throws {
+        let (_, window) = try host(size: wide)
+        let list = try XCTUnwrap(messageController(in: window.rootViewController!))
+        let scroll = try XCTUnwrap(list.collectionView)
+        XCTAssertEqual(list.captureAnchor()?.pinnedToBottom, true)
+        let latest = scroll.contentOffset.y
+        XCTAssertGreaterThan(latest + scroll.adjustedContentInset.top, 300)
+        let delegate: UIScrollViewDelegate = list
+        delegate.scrollViewWillBeginDragging?(scroll)
+        scroll.contentOffset.y = latest - 250
+        list.scrollViewDidScroll(scroll)
+        list.view.setNeedsLayout()
+        list.view.layoutIfNeeded()
+        XCTAssertEqual(list.captureAnchor()?.pinnedToBottom, false)
+        XCTAssertEqual(scroll.contentOffset.y, latest - 250, accuracy: 1,
+                       "A native reading gesture must not snap back to Latest")
+        delegate.scrollViewDidEndDragging?(scroll, willDecelerate: false)
+        XCTAssertEqual(list.captureAnchor()?.pinnedToBottom, false)
+
+        delegate.scrollViewWillBeginDragging?(scroll)
+        scroll.contentOffset.y = latest
+        list.scrollViewDidScroll(scroll)
+        delegate.scrollViewDidEndDragging?(scroll, willDecelerate: true)
+        delegate.scrollViewDidEndDecelerating?(scroll)
+        XCTAssertEqual(list.captureAnchor()?.pinnedToBottom, true,
+                       "Returning to the newest messages resumes following")
+    }
+
     /// Visible accessibility elements with this label, as the user's assistive tech sees them.
     private func elements(labelled label: String, in window: UIWindow) -> [NSObject] {
         var stack: [NSObject] = [window]

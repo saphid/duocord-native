@@ -1,0 +1,30 @@
+{
+  "baseline-build": {
+    "exit": 0,
+    "owned_run_root_removed": true
+  },
+  "red": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "green": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "green2": {
+    "exit": 0,
+    "owned_run_root_removed": true
+  },
+  "full": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "baseline-layout": {
+    "exit": 65,
+    "owned_run_root_removed": true
+  },
+  "release-sim": {
+    "exit": 0,
+    "owned_run_root_removed": true
+  }
+}

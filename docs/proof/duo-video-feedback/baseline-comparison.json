@@ -1,0 +1,20 @@
+{
+  "candidate": {
+    "passedTests": 682,
+    "failedTests": 5,
+    "skippedTests": 0
+  },
+  "baseline_layout": {
+    "passedTests": 2,
+    "failedTests": 5,
+    "skippedTests": 0
+  },
+  "identical_failing_methods_and_primary_messages": true,
+  "failure_methods": [
+    "DuoLayoutTests/testChannelRowsKeepTouchTargetsAtLargerText()",
+    "DuoLayoutTests/testComposerSitsJustAboveHomeIndicatorWithKeyboardHidden()",
+    "DuoLayoutTests/testHiddenSidebarRevealAndTitleSurviveScrolling()",
+    "DuoLayoutTests/testHidingSidebarAfterScrollingKeepsReveal()",
+    "DuoLayoutTests/testSidebarFooterSitsJustAboveHomeIndicator()"
+  ]
+}

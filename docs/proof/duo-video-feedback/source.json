@@ -1,0 +1,8 @@
+{
+  "base_commit": "59bcd5b7b2788b6d5e53486d4ff0989d294d6ee1",
+  "manifest_sha256": "b6f6fd5fabf563c710c92a939b9371251c5c569f8c70fba5b70837094eb3629b",
+  "input_count": 84,
+  "changed_production_inputs": [
+    "Features/MessageList/MessageListController.swift"
+  ]
+}
