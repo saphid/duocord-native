@@ -1,0 +1,24 @@
+{
+  "app_id": "6829036831",
+  "build": "202611070100",
+  "build_id": "ffdc43b4-1a8c-4c47-a9d5-4d12f6b1b8ec",
+  "processing_state": "VALID",
+  "internal_state": "IN_BETA_TESTING",
+  "groups": [
+    {
+      "id": "f3217a3b-fcc8-44f4-b888-2ba4ae058b6a",
+      "name": "Alex"
+    },
+    {
+      "id": "1bb1f712-b8a4-4776-be6d-2a41d0f6274e",
+      "name": "t3crew"
+    },
+    {
+      "id": "a4263d3a-a78d-41d0-a651-a602bbc27220",
+      "name": "DuoCrew"
+    }
+  ],
+  "release_notes_verified": true,
+  "archive_upload_exit": 0,
+  "share_exit": 0
+}

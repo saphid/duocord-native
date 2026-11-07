@@ -1,0 +1,16 @@
+{
+  "task_id": "node:delegated-task:command%3Amcp%3A1f25046f-6793-452f-a2b6-3a20535f0ffe%3Adelegate-task%3Af9103ecf-fa81-400a-aef9-8a3ab8ec947e",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "reasoning": "high",
+  "status": "completed",
+  "verdict": "APPROVE",
+  "actionable_findings": 0,
+  "frozen_diff_sha256": "1d2e1f79e528acbc87a4c75d2715f52559e2a61b959e113f05fb325057cd5191",
+  "target": [
+    "App/MainView.swift",
+    "Features/Sidebar/SidebarColumn.swift",
+    "Tests/DuoLayoutTests.swift"
+  ],
+  "different_model_review": "unavailable: Opus rate limit"
+}

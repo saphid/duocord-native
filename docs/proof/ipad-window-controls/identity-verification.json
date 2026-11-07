@@ -1,0 +1,19 @@
+{
+  "source_inputs_verified": 84,
+  "products": [
+    {
+      "bundle": "com.saphid.duocord",
+      "build": "202611070100",
+      "version": "1.0",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true
+    },
+    {
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "build": "202611070100",
+      "version": "1.0",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true
+    }
+  ]
+}
