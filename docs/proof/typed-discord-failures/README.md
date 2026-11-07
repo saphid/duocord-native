@@ -17,3 +17,11 @@ The existing no-automatic-write-retry and uncertain-outcome behavior remain. Cod
 - Fresh independent review through claudeAgent / claude-opus-5-5 / high failed before review at the provider API rate limit. No independent findings or approval exist. See [attempt receipt](review-attempt.json). No CODING_STANDARDS.md was found in the changed paths, current worktree or repository primary.
 - Full suite was not rerun for this bounded transport batch. The preceding release’s full suite had five known layout failures, documented in [Duo evidence](../duo-video-feedback/README.md).
 - No live Discord operations or new visual verification occurred. The earlier Duo sidebar/fold/rotation/bar-gesture task remains open in [#32](https://github.com/saphid/duocord-native/issues/32).
+
+## Released
+
+Duocord Native **1.0 (202611070623)** is available to the existing internal TestFlight groups Alex, t3crew and DuoCrew. Apple independently reports VALID / IN_BETA_TESTING with exact release notes and group assignments. Archive/export, upload and sharing exited0. Both exported distribution identities/signatures and all84 frozen inputs passed verification; IPA and archived executables remained unchanged after upload. All four invocation-owned DerivedData roots (three tests, one archive) were removed.
+
+Merged [#35](https://github.com/saphid/duocord-native/pull/35) as [6561b26](https://github.com/saphid/duocord-native/commit/6561b26e45653e3ff24c6aba3ed513c3006b5c32). Exact release source is tagged [testflight/202611070623](https://github.com/saphid/duocord-native/tree/testflight%2F202611070623). Manifest SHA256: `abe9a055964efc08ba8329fc150fb5782c539382b68d14d3d5297c7b3cf3e4e5`.
+
+See [availability](availability-readback.json), [source](release-source.json), [manifest](source-manifest.sha256) and [signed artifact checks](archive-verification.json). No production App Store submission, new tester invitation or public beta link was created. Independent-review and Duo visual-verification limits above remain.

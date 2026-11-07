@@ -1,0 +1,8 @@
+{
+  "source_commit": "a523fd9c84c72501c80e7b6d414bdb183de0daa3",
+  "build": "202611070623",
+  "manifest_sha256": "abe9a055964efc08ba8329fc150fb5782c539382b68d14d3d5297c7b3cf3e4e5",
+  "input_count": 84,
+  "merged_commit": "6561b26e45653e3ff24c6aba3ed513c3006b5c32",
+  "merged_tree_matches_built_tree": true
+}

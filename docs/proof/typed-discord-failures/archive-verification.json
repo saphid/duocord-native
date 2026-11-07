@@ -1,0 +1,53 @@
+{
+  "source_inputs_verified": 84,
+  "manifest_sha256": "abe9a055964efc08ba8329fc150fb5782c539382b68d14d3d5297c7b3cf3e4e5",
+  "ipa_sha256": "1c1d06c393bfe7b9be69bb5a92ac680c85d24d2c8289fc1d3b8a5affca7d3b29",
+  "products": [
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611070623",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "profile_matches_bundle": true,
+      "executable_sha256": "1bdc5624c37b2663ee083d42b326217459f46f06e1f03ab9b9f694eb2a034d52"
+    },
+    {
+      "kind": "archive",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611070623",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": true,
+      "profile_matches_bundle": true,
+      "executable_sha256": "2cdcadc0b2e0beff17b10488d7cf90ebf371d0fa1a5973dfd9a35073c09dcc52"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord",
+      "version": "1.0",
+      "build": "202611070623",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "profile_matches_bundle": true,
+      "executable_sha256": "b001bca1244f236742b075f7877b15051e5e7297151a447bf0be7ec7e35d65cd"
+    },
+    {
+      "kind": "export",
+      "bundle": "com.saphid.duocord.LiveActivity",
+      "version": "1.0",
+      "build": "202611070623",
+      "team": "NJZUMEA4BN",
+      "signature_verified": true,
+      "get_task_allow": false,
+      "profile_matches_bundle": true,
+      "executable_sha256": "b42bec286fa9372508b3b4d44cc1c7e5c37525deef318eef05ed151a0b1e50dd"
+    }
+  ],
+  "owned_derived_data_removed": true,
+  "verification_note": "Initial check incorrectly required an exact archive development-profile AppID for the extension. Archive extension uses a valid team wildcard. Both exported distribution profiles match exact bundle IDs."
+}
