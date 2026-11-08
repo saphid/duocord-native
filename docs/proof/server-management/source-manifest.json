@@ -4,7 +4,7 @@
   "App/CapabilityFreshness.swift": "96b7d0c280aec8d2f3db266d07372d3c1857d8451dfe416fd24bcf26dc0a3f26",
   "App/Components.swift": "5e6cf5626f0093bff0a5b1d4062729d9a28e791b7cce9b5794b19b4db24bc32d",
   "App/DuocordNativeApp.swift": "7610f4de99f234635d9abdf2fd08f7a5c47a19ee4a0c328d0ff1a38a15a5f08f",
-  "App/Info.plist": "c71e1ba8fef3bb3971e7524216fbb0fe1ab857c42a6b7299f21f3a467d492b55",
+  "App/Info.plist": "14d87b1d123039cf24b45bfc41b13c6931352514fcc895a9e093c1b42956795f",
   "App/MainView.swift": "a27659f7d237e47e2c659a2d0a3889b6be62d90a9b8e5209a8cdf253acf875e9",
   "App/OperationCapabilities.swift": "f30d962d0b28cd8441a4c7520406b309ec4d970da5ac2f0f7a7f0513ef2031c5",
   "App/PeopleActions.swift": "c9d9e690fa46c6469047ad1e104d8038e60318bd5b3cb1b53aa85a7d45ddff85",
@@ -65,7 +65,7 @@
   "Features/Settings/ContentReportView.swift": "2be233968500b3a589b5d7a1c35d5b6accacd22e99916959d01e027ea406146c",
   "Features/Settings/SettingsView.swift": "6452be298f68b2218477bd4871a01211a059f638b2a1e2a6e1bb57eb93464d7f",
   "Features/Sidebar/FriendsView.swift": "af2d01292203b42c06c1cbcb0a7942aa03f1b1afc535cc968d25bd82796e80f7",
-  "Features/Sidebar/ServerDragging.swift": "1b490bc6d01732d2907074c03ce802abde40ae39ec8b434697f14b213a0143b9",
+  "Features/Sidebar/ServerDragging.swift": "0fd02124a1bee33adc66e1a45d19892add688a98a67cef23a7b66dad9c6b999b",
   "Features/Sidebar/SidebarColumn.swift": "71cd047583507afd8c2c5e97000996d9b4fd7f9d40fb9ef54bd0aae3ba34dc09",
   "Features/Sidebar/ThreadMenu.swift": "c4e525038a8fffc5161dce4605633f53bafd8f26d6870562ee89e6629f3772e2",
   "Features/Voice/VoiceActivityController.swift": "432904ac631f7eeac643b76e117e51c68c655ef650fbef0a203b87138e2a7479",
@@ -91,5 +91,5 @@
   "Resources/MediaFixtures/still.png": "97dc2a524a548703a63042dd6f5ad4980a7e9c8b1e4077c03acd876dc33d7ebd",
   "Shared/VoiceActivity.swift": "867a811db2f27256130b0e1dabfd131ea77f34b77858eae6d62aeddaf26e11ea",
   "Shared/VoiceActivityViews.swift": "8b4eb2da0f38da88469a19a799f404430b75fba92c2645c37c96b44257b5c655",
-  "project.yml": "45794e5289b91e1950b678cffe3caa70ee59168f2fab852f540dd46934934493"
+  "project.yml": "4668f21f8ff6aa048537b883ee501f094db77496d012f7f11134776374a60e67"
 }

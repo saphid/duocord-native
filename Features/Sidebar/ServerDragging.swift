@@ -14,7 +14,7 @@ struct ServerDragSource: ViewModifier {
             let provider = NSItemProvider()
             let receipt = model.serverDrag(guild)
             guard !receipt.isEmpty else { return provider }
-            provider.registerDataRepresentation(forTypeIdentifier: UTType.duocordServerMove.identifier, visibility: .ownProcess) { completion in
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.duocordServerMove.identifier, visibility: .all) { completion in
                 completion(Data(receipt.utf8), nil)
                 return nil
             }

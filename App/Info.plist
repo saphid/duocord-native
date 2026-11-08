@@ -24,5 +24,18 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Duocord server move</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.saphid.duocord.server-move</string>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -1,48 +1,584 @@
 {
-  "status": "blocked_device_unavailable",
-  "recorded_at": "2026-11-08T22:44:42.813884+00:00",
-  "host_id": "local",
-  "requested_device_id": "8E509496-7A33-4AF4-8E08-78218F2DF7C6",
-  "app_id": "com.saphid.duocord",
-  "app_launched": false,
-  "checks": {
-    "native_drag_order": "not_run",
-    "leave_named_confirmation": "not_run",
-    "cancel_retains_server": "not_run",
-    "confirm_removes_exact_server": "not_run",
-    "selection_returns_home": "not_run",
-    "reorder_after_leave": "not_run",
-    "mock_failure_feedback": "not_run",
-    "mock_failure_preserves_server": "not_run"
+  "status": "pass_final_native_mock_ui",
+  "recorded_at": "2026-11-08T23:48:31.391376+00:00",
+  "device": {
+    "hostId": "local",
+    "id": "B8344F4C-70CD-43A9-8FB4-7B5481C11723",
+    "name": "Duocord server management 20261109",
+    "platform": "iOS 27.2",
+    "viewport": [
+      402,
+      874
+    ]
   },
-  "tool_calls": [
+  "session": "t3-0f489ef9ba6fdbee9a5ef0f4",
+  "app_id": "com.saphid.duocord",
+  "candidate_artifact": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/build/server-management/final-products/DuocordNative.app",
+  "identity": {
+    "count": 93,
+    "mismatches": [],
+    "source_manifest_sha256": "eca31890c58f660713b4adacbf66c586846d0b1b5f73ccd577c4d3866a5b5296",
+    "binary_sha256": "2adb8a788ea0053da96a3524bf55c4524419c2609e4dc6364e5bef02a787a3d3",
+    "build_exit": "0",
+    "artifact_tree_sha256": "cb966aa3baaa10098f0706622b5ecad5d99b3a75232e06f3e2c1ea1adef25ed2"
+  },
+  "input_hashes": {
+    "App/AppModel.swift": "c96a0dddbfd9e70e80b82b73a66086557c22bc5abcfba0654cec72e92f44f04e",
+    "App/AppSettings.swift": "524c52bfdf69902366d52bada8ef25cf5006c747e1b43c48cbb152f9ed26bbbe",
+    "App/CapabilityFreshness.swift": "96b7d0c280aec8d2f3db266d07372d3c1857d8451dfe416fd24bcf26dc0a3f26",
+    "App/Components.swift": "5e6cf5626f0093bff0a5b1d4062729d9a28e791b7cce9b5794b19b4db24bc32d",
+    "App/DuocordNativeApp.swift": "7610f4de99f234635d9abdf2fd08f7a5c47a19ee4a0c328d0ff1a38a15a5f08f",
+    "App/Info.plist": "14d87b1d123039cf24b45bfc41b13c6931352514fcc895a9e093c1b42956795f",
+    "App/MainView.swift": "a27659f7d237e47e2c659a2d0a3889b6be62d90a9b8e5209a8cdf253acf875e9",
+    "App/OperationCapabilities.swift": "f30d962d0b28cd8441a4c7520406b309ec4d970da5ac2f0f7a7f0513ef2031c5",
+    "App/PeopleActions.swift": "c9d9e690fa46c6469047ad1e104d8038e60318bd5b3cb1b53aa85a7d45ddff85",
+    "App/ReadActions.swift": "bf1d3636155804853b65f3589024d3022843940e25117654d144b0c19bd366e0",
+    "App/ServerManagement.swift": "0632ac0a0c42f939989163caf1d4bebdf74ec373171d47e84340b15835afc92b",
+    "App/Theme.swift": "084709a0ebcc06e5fe9b8c3b0c77a25d8f4d14a1c2df8340c3fcf42866f68b1b",
+    "App/ThreadActions.swift": "1ad0fdc32bdb39add65ce70c3f7d682af9455f7693fd5498cb0e8608775a4b89",
+    "Discord/Capabilities.swift": "8d41164efefb95e0c6a837ae52e6a6d64489c7212adc1aa3270516cb81c93090",
+    "Discord/ContentSafety.swift": "b7c367004322b803d7eeb6b9f17aa6422c66d6bf3df0f66ac0c2883cf35c7b5e",
+    "Discord/Events.swift": "8e98605cb1d3b652bf1a6919a2fed53ce6ef727b694407416e58d294001d0f18",
+    "Discord/Gateway.swift": "03555f6f2fe67dbcfea0082a538d195ec47a687906a80a8667e346198d52db40",
+    "Discord/GuildFolderSettings.swift": "c6f3b9597a13952cdf1b498b4542507469c82c67305a6e091973a3ff13cba9ef",
+    "Discord/GuildOrganization.swift": "dee18c479ca2da298bb98bd656a435a92e7a23e927d5c8ef26e00c4eeb4de97c",
+    "Discord/MessageCenter.swift": "6d76a0f6ab245ac3adc85e004960072d7fb35022d3b3449bcd9ef8c2da3b2867",
+    "Discord/MessageContent.swift": "99732f6a6694c8796f150ec16ead6e73df93e79b0fe1ea3c2ddb6ed5d5d26e28",
+    "Discord/Mock.swift": "850c74621f74fc680efdd8c5f627febcb0e9740236ffab07338749f0653d2b92",
+    "Discord/Models.swift": "d8a5edddd7d3156c3d87a4b6ed421a3917f92083d516569aff8f05206c61882d",
+    "Discord/NotificationSettings.swift": "ce0958ac9b8e2c1f1f63aa1311e2c1ff88b8352c8adcdaa58ee91c5796eb5788",
+    "Discord/OutgoingSend.swift": "6feaf8f8fb884286d6ec1ab46853b1289c8cc2f0910252484d51df8480490769",
+    "Discord/ProtoSettings.swift": "e5f503231369eba712842be544925728fd1e2eaaf8739fc57f2c4f85db6366e4",
+    "Discord/REST.swift": "4d69b0cd17854c9146962f88ae241cd9dd4efa94f3d704c17b0446ccf53a0661",
+    "Discord/ReadOperations.swift": "1c0c30eed5b894edc01b64074cc13a79aad4b6bf47d1d7506114af45ce06cf80",
+    "Discord/Relationships.swift": "200d767e3e73179d5e4f3bec5b07839641211209dc6b30aa8d53d8e7ee80981d",
+    "Discord/Routes.swift": "4bbad5375d7544031543475d216d3b9bb64745373e10bd6bfd6cf4363af334db",
+    "Discord/Session.swift": "3fa9d447e1c5870e77cd92991ed700b4490889c569e337c3b53d1c178eaf2c44",
+    "Discord/SnapshotCache.swift": "ce6d0e5f2b268ccc5eedd69e5f988c7f5ad06e13eaaf24158c53b8d5372a7be8",
+    "Discord/Store.swift": "eea8d4149edd54261ef56afb892bb6d1035f30cc7343e9c5a03c147971ee4546",
+    "Discord/ThreadNotificationSettings.swift": "14528f8c0092310c83694f473d702874ece29230a73f7a98854e659ecc93eccf",
+    "Discord/ThreadOperations.swift": "dfe5dc7095ff6c60875a9881ae57666a82ea6bd294923d9a191e299f79157262",
+    "DuocordNative.xcodeproj/project.pbxproj": "3c7f39da37dbcebb90232ad5c5767b224b67155af894e7703b8e0ae4270b9f4e",
+    "Features/Chat/Autocomplete.swift": "6c6dc0621184011d327c8fb48e2307ca7282ca9c88f8c964001051eb56b911b3",
+    "Features/Chat/ChatView.swift": "67ba11f07375f686bc2fa7d1097274c72bef1a59663d19497a4124a45839ff28",
+    "Features/Chat/ComposerContinuity.swift": "096ba05958f337a030a17b68d0a6412eadd39e53efff8dfd2eee464ecf5123b8",
+    "Features/Chat/ReadControls.swift": "b7b91178c8da7c593680e7ece8ab9920ba7dc944a6e958cea42e94d0a6674083",
+    "Features/Login/LoginSheet.swift": "78b41f034891bf40526216d05959542bdaff7b2fb85540e099d29cd1ef986b53",
+    "Features/Members/MemberListView.swift": "e3427e93386a13515bd6ae9a531e49287cec3fe36a10570ca8dd0477dbf58eb6",
+    "Features/MessageList/AnimatedMedia.swift": "93c04af1250a64e57a0fa87ba37294015f8bfaaffdc08a854bd0a2cca1ba53c6",
+    "Features/MessageList/ImagePipeline.swift": "87a02cafd711dad47e0d51bcdb44f653c192c9d396b4fa20b427e1a8ff194db4",
+    "Features/MessageList/InlineVideoPlayback.swift": "296d87295f3dc6c8ecf7f9cc52fb566f8d5de73c3cd20f47188538c3de8e48ab",
+    "Features/MessageList/MessageBuilder.swift": "4ac40a076d22adef9e5945aa358c82b579c5ba1b703f574a576751eaf8aba1af",
+    "Features/MessageList/MessageCell.swift": "5eeb29a2bb8bbcd17c2da0974659feadf64a12d6e3f99fe068e7b585213576e4",
+    "Features/MessageList/MessageContentRenderer.swift": "3303b17c926471ad5085056bd93fbe55d3a312e1c2153d1c29034a1aec94ae18",
+    "Features/MessageList/MessageListController.swift": "6717ce7cb504191a62caede2670a14b842285272d3320441cbd5b21924ba133b",
+    "Features/MessageList/MessageListLayout.swift": "c26e0979e650b0a6c99a2ecc59b497c031828afdd66becdfa364704678faecc7",
+    "Features/MessageList/MessageRendering.swift": "a4570f2c0ccf7aaf31e73d79a425dd7b6c24efdbf7c1727441ddb301930dd2b4",
+    "Features/MessageList/RichTextView.swift": "2357ef6add16c4bf58de74bd817ffae7d1269e6fd07b1ea2cdf28f1760ff9404",
+    "Features/Notifications/NotificationSettingsView.swift": "6f8821d63f380eee45c93ba536128c6e016dec527c6607997240a9f38dff0374",
+    "Features/Reactions/EmojiCatalogData.swift": "157e2b7af08a5f6196f671574032954b4636bceb996e4aa1c79ae6ef811808c2",
+    "Features/Reactions/ReactionViews.swift": "3e42012c77561f5a4e71d5dfdf8a7acfe2c3d2ba5633f0cd624fb4bd409b93ac",
+    "Features/Search/InboxUnreadOrganization.swift": "958197f120348ee4e4b10fa67af31018dc52e5296c58ff90577aa01ad465ea67",
+    "Features/Search/InboxUnreadPreview.swift": "94996abbac2130f6e06f34b2fc2b60eb2072d31924795b73e3417d216dddfc29",
+    "Features/Search/LookupPagingControls.swift": "7dcb95dae38b568c2c590b94196c124c804e1aef9d85debfefc689ff457e9977",
+    "Features/Search/LookupPagingState.swift": "dcbd4297ad29e4233fa82e9bdbc71464452a55c37123d37898c3f8ed02195651",
+    "Features/Search/LookupRequestState.swift": "0dc47e44020fd239e257c3460500c6f395a7c172a98985b167c05090bcd83b35",
+    "Features/Search/LookupViews.swift": "cec09302b70f6c3b889ea4b81de21c848ac9e55f11f7ed47df9df2c7801c5ec5",
+    "Features/Search/MessageExcerptPresentation.swift": "043a23c05232b3e83852090bc9743ff6a4f4b068121cec723e52677559e69c93",
+    "Features/Search/OtherListPaging.swift": "794d498c4d90e0c108c25328f4f7231ecbddf06ea09d232c1d25f2a41652285a",
+    "Features/Settings/ContentReportView.swift": "2be233968500b3a589b5d7a1c35d5b6accacd22e99916959d01e027ea406146c",
+    "Features/Settings/SettingsView.swift": "6452be298f68b2218477bd4871a01211a059f638b2a1e2a6e1bb57eb93464d7f",
+    "Features/Sidebar/FriendsView.swift": "af2d01292203b42c06c1cbcb0a7942aa03f1b1afc535cc968d25bd82796e80f7",
+    "Features/Sidebar/ServerDragging.swift": "0fd02124a1bee33adc66e1a45d19892add688a98a67cef23a7b66dad9c6b999b",
+    "Features/Sidebar/SidebarColumn.swift": "71cd047583507afd8c2c5e97000996d9b4fd7f9d40fb9ef54bd0aae3ba34dc09",
+    "Features/Sidebar/ThreadMenu.swift": "c4e525038a8fffc5161dce4605633f53bafd8f26d6870562ee89e6629f3772e2",
+    "Features/Voice/VoiceActivityController.swift": "432904ac631f7eeac643b76e117e51c68c655ef650fbef0a203b87138e2a7479",
+    "Features/Voice/VoiceController.swift": "1ad2bafd40d05b7a7f4f20b10bc5ff180e5f4f3e18d1854258e7b14085389967",
+    "Features/Voice/VoiceEngine.swift": "3c5c6c34b7e2db6eca67797c74cbe5dcf6d5580d8fb63a3a5e5151664d78eebe",
+    "LiveActivity/Info.plist": "2391e8342fe8d4cad3b4ce893ef83c9b2507e8593c7aac5c37227d1d187abe44",
+    "LiveActivity/VoiceLiveActivity.swift": "866824f02673c9b500c3823197f9cacf087c981eadac8a7d510e5970b4f8f28c",
+    "Markdown/DiscordMarkdown.swift": "478f4ec79d3525c9c643ffbd7690319c9b15c62fd89b73f9d8e70acc2e6e59a2",
+    "Markdown/MarkdownRenderer.swift": "b7880c24dc4e97686e7e52467d0e3efaabf27b615125bddaf0109fa5da99c944",
+    "Platform/BackgroundKeepAlive.swift": "eb3553ac0b7f57f4fb29d4f747e10d82bf50b1464cb1ab7ad93e06cad7fe1eb0",
+    "Platform/Fold.swift": "378f4bcf4a42c95896b93d66bc9533c9eec5a658aa0323521eecdc41bbe6036d",
+    "Platform/NotificationDelivery.swift": "21225f51c76f58a7cf5485102d7e8c3ceb5a1389098a2c8164cd3164f85bbb94",
+    "Platform/NotificationService.swift": "a7f8ff4431c1abfa425e61e58713185e094bce74adb262e3e34ecd16fb1477be",
+    "Platform/Perf.swift": "14d2798bbea64de0906f7e5c4ee9127b6ebb5431b7d85ca362cffa33f33eb01e",
+    "Resources/Assets.xcassets/AccentColor.colorset/Contents.json": "6b2c787534e83dbef339535fd8f62b0ef1f8601302e38fcc49011ac2b89e9ea1",
+    "Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png": "381a5d6457ea574c482ed74a869ca01d82cccad8f221a1104da2fd2e3ae9270f",
+    "Resources/Assets.xcassets/AppIcon.appiconset/Contents.json": "93a3d571d6f6cb3e6a38a0aac929071260b3afae7054e415351cc9e93b17b84e",
+    "Resources/Assets.xcassets/Contents.json": "80b0b2e5ce5f42d06c9cea0234147e7f2bea58ef205c47ce3a82f0abe4b64465",
+    "Resources/MediaFixtures/loop-with-audio.mp4": "d1bcd45fd6383dc4726d9059f4677866478cacb4fe2ce8e71acb3739d28b38da",
+    "Resources/MediaFixtures/pulse.gif": "17e38461c8060681fddaa168e36bac5b58e089127728569e13d1c8fabe072bb3",
+    "Resources/MediaFixtures/pulse.png": "f2e8bc6eced1842bc571812d72288513c7a0780d4d72dfb5b14a518890c170c0",
+    "Resources/MediaFixtures/pulse.webp": "0ca86b693b60861e75efb3cb0bc6cb75d41d114fffcf469e3da05e141dbb40d2",
+    "Resources/MediaFixtures/still.png": "97dc2a524a548703a63042dd6f5ad4980a7e9c8b1e4077c03acd876dc33d7ebd",
+    "Shared/VoiceActivity.swift": "867a811db2f27256130b0e1dabfd131ea77f34b77858eae6d62aeddaf26e11ea",
+    "Shared/VoiceActivityViews.swift": "8b4eb2da0f38da88469a19a799f404430b75fba92c2645c37c96b44257b5c655",
+    "project.yml": "4668f21f8ff6aa048537b883ee501f094db77496d012f7f11134776374a60e67"
+  },
+  "installed_identity": {
+    "installed_path": "/Users/saphid/Library/Developer/CoreSimulator/Devices/B8344F4C-70CD-43A9-8FB4-7B5481C11723/data/Containers/Bundle/Application/CB10237C-3B4E-4FB0-BAF9-56315F7275E7/DuocordNative.app",
+    "get_app_container_exit": 0,
+    "installed_mismatches": [],
+    "source_mismatches": [],
+    "count": 93
+  },
+  "checks": {
+    "93_frozen_hashes_match": true,
+    "initial_full_rail": true,
+    "primary_native_drag": true,
+    "cancel_retains_full_rail": true,
+    "cancel_retains_selection": true,
+    "named_confirmation": true,
+    "confirmed_leave_removes_only_duo": true,
+    "confirmed_leave_selects_dm": true,
+    "dm_list_visible": true,
+    "post_leave_native_drag": true,
+    "failure_retains_full_rail": true,
+    "failure_named_403": true
+  },
+  "orders": {
+    "beforeSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "afterSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "SwiftUI Collective",
+      "Duo Design Lab",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "cancelSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "SwiftUI Collective",
+      "Duo Design Lab",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "leaveSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "postSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "Book Club",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Coffee Nerds"
+    ],
+    "failureBeforeSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "failureSnap": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord",
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ]
+  },
+  "native_gestures": {
+    "primary": "gesture drag @e12~s955625 @e10~s955625 350 1000 1500",
+    "post_leave": "gesture drag @e17~s955648 @e10~s955648 350 1000 1500",
+    "failure": "gesture drag @e12~s955654 @e10~s955654 350 1000 1500",
+    "exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "observed": "Native lifted previews, insertion/drop indicators, settled rail. No Move context-menu substitution."
+  },
+  "command_receipts": "build/server-management/final-ui-proof/commands.json",
+  "install": {
+    "command": "xcrun simctl install B8344F4C-70CD-43A9-8FB4-7B5481C11723 build/server-management/final-products/DuocordNative.app",
+    "exit_code": 0
+  },
+  "artifacts": {
+    "before.png": {
+      "sha256": "c3447b91ac9e71db384fa444eac39aae6671a0ed08b0eaeda7c740fa16e1464e",
+      "bytes": 65726
+    },
+    "failure-drag.gif": {
+      "sha256": "581f09150f647fc160ddf82f40a905d18e8c1e2ba4609539b48f991a661f0f70",
+      "bytes": 706159
+    },
+    "leave.mp4": {
+      "sha256": "5527f714bab5235dc2f80620312721ea44d78a47737c01a550772154a48b38ce",
+      "bytes": 48214478
+    },
+    "after.png": {
+      "sha256": "687bfa6505ae2401515aab8de84814aa2ca31ebd1f0e6515885e1b89434fc9df",
+      "bytes": 65700
+    },
+    "failure-drag.mp4": {
+      "sha256": "b44f7d4970aaa6b0bd586df45c8511112b3075fa352371f168cb34189cc26387",
+      "bytes": 1620688
+    },
+    "after-drag.gif": {
+      "sha256": "bac14b673ba42a4513ac6e45cbc0a7d55ce663a20c42823ad9434edd8032a89c",
+      "bytes": 419974
+    },
+    "leave-cancel.gif": {
+      "sha256": "c10204e13ea48f54af290b658a946dee62366718a2edc8eccce4e3fdb88b71b5",
+      "bytes": 3642723
+    },
+    "leave-confirmation.png": {
+      "sha256": "a35b6c4a5b9f066313518bc98b61a4630ab6d5a7b450991f3e03348298cd9ca8",
+      "bytes": 89228
+    },
+    "post-leave-drag.gif": {
+      "sha256": "117223b8afde0a9c2f782417e2d2c6a8f111a286d5b1253d72728f2bd12b44b2",
+      "bytes": 412744
+    },
+    "drag.mp4": {
+      "sha256": "41c0d962ac82e5eb7f61d4b51256930aaba51948fe8d60db8e87ae0003d011ea",
+      "bytes": 972415
+    },
+    "after-leave.png": {
+      "sha256": "76c7b254b597fcc612a77011037f95589dfa3def0dde9c6b316fe472b012f371",
+      "bytes": 53949
+    },
+    "failure.png": {
+      "sha256": "a47097d1800a2feb5bcbaecd9e569b0a4a82ee31ea876d4a36456466b5e7e74c",
+      "bytes": 83130
+    },
+    "post-leave-drag.mp4": {
+      "sha256": "98158bcce71c8fea10aeac635c90d372958272735de0f4a4a38169de82693f14",
+      "bytes": 843869
+    },
+    "post-leave.png": {
+      "sha256": "02ebcb106830b327e07af81ebbd4522aee20f30a447748f800a504eaa7a03104",
+      "bytes": 53925
+    },
+    "leave-confirm.gif": {
+      "sha256": "d9b5f871cd283f1e13887fb530696152fe10b7927b37c0dde26dcabcf9c83031",
+      "bytes": 1543293
+    },
+    "before-drag.gif": {
+      "sha256": "cefea4a473e71f576e37039b0343badf7b6f7a7e94e687ad8297c45b090ad84e",
+      "bytes": 1014395
+    }
+  },
+  "media_metadata": {
+    "build/server-management/drag-diagnosis/attempt1-exact.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "15800/287",
+          "nb_frames": "237"
+        }
+      ],
+      "format": {
+        "duration": "4.305000",
+        "size": "2361876"
+      }
+    },
+    "build/server-management/final-ui-proof/smoke.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "30/1",
+          "nb_frames": "65"
+        }
+      ],
+      "format": {
+        "duration": "2.166667",
+        "size": "1095120"
+      }
+    },
+    "build/server-management/final-ui-proof/failure-smoke.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "30/1",
+          "nb_frames": "72"
+        }
+      ],
+      "format": {
+        "duration": "2.400000",
+        "size": "973086"
+      }
+    },
+    "docs/proof/server-management/drag.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "46200/1613",
+          "nb_frames": "154"
+        }
+      ],
+      "format": {
+        "duration": "5.376667",
+        "size": "972415"
+      }
+    },
+    "docs/proof/server-management/leave.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "30/1",
+          "nb_frames": "6439"
+        }
+      ],
+      "format": {
+        "duration": "214.633333",
+        "size": "48214478"
+      }
+    },
+    "docs/proof/server-management/post-leave-drag.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "324/11",
+          "nb_frames": "162"
+        }
+      ],
+      "format": {
+        "duration": "5.500000",
+        "size": "843869"
+      }
+    },
+    "docs/proof/server-management/failure-drag.mp4": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "width": 1206,
+          "height": 2622,
+          "avg_frame_rate": "90600/3223",
+          "nb_frames": "151"
+        }
+      ],
+      "format": {
+        "duration": "5.371667",
+        "size": "1620688"
+      }
+    },
+    "docs/proof/server-management/before-drag.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "gif",
+          "width": 402,
+          "height": 874,
+          "avg_frame_rate": "25/2",
+          "nb_frames": "52"
+        }
+      ],
+      "format": {
+        "duration": "4.330000",
+        "size": "1014395"
+      }
+    },
+    "docs/proof/server-management/after-drag.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "gif",
+          "width": 402,
+          "height": 874,
+          "avg_frame_rate": "25/2",
+          "nb_frames": "65"
+        }
+      ],
+      "format": {
+        "duration": "5.410000",
+        "size": "419974"
+      }
+    },
+    "docs/proof/server-management/post-leave-drag.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "gif",
+          "width": 402,
+          "height": 874,
+          "avg_frame_rate": "25/2",
+          "nb_frames": "66"
+        }
+      ],
+      "format": {
+        "duration": "5.500000",
+        "size": "412744"
+      }
+    },
+    "docs/proof/server-management/failure-drag.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "gif",
+          "width": 402,
+          "height": 874,
+          "avg_frame_rate": "25/2",
+          "nb_frames": "64"
+        }
+      ],
+      "format": {
+        "duration": "5.330000",
+        "size": "706159"
+      }
+    },
+    "docs/proof/server-management/leave-cancel.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "width": 402,
+          "height": 874,
+          "nb_frames": "288"
+        }
+      ],
+      "format": {
+        "duration": "24.000000",
+        "size": "3642723"
+      }
+    },
+    "docs/proof/server-management/leave-confirm.gif": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "width": 402,
+          "height": 874,
+          "nb_frames": "128"
+        }
+      ],
+      "format": {
+        "duration": "10.660000",
+        "size": "1543293"
+      }
+    }
+  },
+  "media_commands": "build/server-management/final-ui-proof/media-commands.json",
+  "media_inspection": {
+    "method": "Saved smoke contact sheets; continuous MP4 sequential decoding; timestamped action/result frames and final GIF frames inspected at 390px width. Full frame, no crops/compositions or speed changes. No full real-time player playback claim.",
+    "gif_sampling_fps": 12,
+    "source_video_dimensions": [
+      1206,
+      2622
+    ],
+    "gif_dimensions": [
+      402,
+      874
+    ],
+    "leave_gif_segments_seconds": {
+      "cancel": [
+        0,
+        24
+      ],
+      "confirm": [
+        204,
+        214.633333
+      ]
+    },
+    "raw_leave_idle_time": "Uncut 214.633333s includes agent/tool pauses; not app latency.",
+    "source_baseline": "build/server-management/drag-diagnosis/attempt1-exact.mp4",
+    "baseline_attribution": "Prior instrumented diagnostic artifact missing exported type; same mock surface/flow, 1000/1000/500 gesture versus final 350/1000/1500. Not recaptured and not a timing comparison."
+  },
+  "reused_leave_failure": {
+    "status": "prior_pass_attributed_not_rerun_final",
+    "receipt": "build/server-management/final-ui-proof/prior-receipts/ui-verification.json",
+    "screenshot": "build/server-management/final-ui-proof/prior-receipts/failure.png",
+    "basis": "Task explicitly states leave failure passed with unchanged source; earlier receipt confirms named 403 and retained selection/membership."
+  },
+  "recoveries": [
     {
-      "tool": "device_open",
-      "attempt": 1,
-      "isError": true,
-      "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+      "error": "Contact sheets need an MP4 recording; leave.mp4 is not a readable MP4",
+      "exit_code": 1,
+      "cause": "Inspection attempted before asynchronous record stop completed.",
+      "recovery": "Waited for owned export completion exit 0, then passed finalized MP4 once; contact-sheet exit 0."
     },
     {
-      "tool": "device_list",
-      "isError": false,
-      "observed": "Requested device absent; local iOS platform ready; no open device sessions. Different server-management device B8344F4C-70CD-43A9-8FB4-7B5481C11723 listed; not opened."
-    },
-    {
-      "tool": "device_open",
-      "attempt": 2,
-      "isError": true,
-      "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+      "error": "ModuleNotFoundError: No module named 'PIL'",
+      "exit_code": 1,
+      "recovery": "GIF conversion had already completed; used installed ffmpeg to extract proportional 390px QA frames instead. Exit 0."
     }
   ],
-  "cli_commands": [],
-  "cli_exit_statuses": [],
-  "screenshots_captured": [],
-  "video_captured": false,
-  "product_bug_identified": false,
   "limits": [
-    "Stopped after repeated device_open failure per device boundary.",
-    "No native UI behavior observed; no test may be treated as passed.",
-    "No app launch, simulator input, build, source edit, live Discord action or subagent work performed."
+    "Mock-only; no real Discord operations or server persistence tested.",
+    "Cross-launch mock resets fixture; no cross-launch persistence claim.",
+    "Final debug logging removed: final runtime verdict is UI evidence, not a newly logged callback chain; prior instrumented full chains are in differential-proof/RESULT.md.",
+    "Hobbies retained as collapsed folder with 3 servers; individual contents not expanded.",
+    "Before/after baseline gesture hold parameters differ; no performance comparison.",
+    "Media QA uses decoded temporal frames; full real-time player playback was unavailable.",
+    "No PR publication, source edits, builds, commits, subdelegation or other-device cleanup."
   ],
-  "cleanup": "No device session opened; nothing to close."
+  "cleanup": {
+    "app_close_exit": 0,
+    "device_close_success": true,
+    "shutdown": false,
+    "scope": "Own app/session/panel only; simulator remains booted."
+  },
+  "prior_evidence_preserved": "build/server-management/final-ui-proof/prior-receipts",
+  "concurrent_parent_file_changes_observed": [
+    "verification.json"
+  ],
+  "parent_files_written_by_this_agent": []
 }

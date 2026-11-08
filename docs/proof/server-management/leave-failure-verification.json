@@ -1,0 +1,502 @@
+{
+  "status": "partial_pass_native_drag_not_proven",
+  "recorded_at": "2026-11-08T23:14:14.154197+00:00",
+  "host_id": "local",
+  "device_id": "B8344F4C-70CD-43A9-8FB4-7B5481C11723",
+  "device_name": "Duocord server management 20261109",
+  "platform": "iOS 27.2",
+  "app_id": "com.saphid.duocord",
+  "candidate_artifact": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/build/server-management/gui-products/DuocordNative.app",
+  "candidate_provenance": "User supplied: GUI build exit 0; 93 source hashes match reviewed head 35b4d69d. This test agent did not rebuild or independently rehash source.",
+  "checks": {
+    "candidate_installed_first": "pass",
+    "fictional_mock_only": "pass",
+    "native_drag_order": "not_passed_order_unchanged",
+    "mock_settings_save_after_drag": "not_observed",
+    "leave_named_confirmation": "pass",
+    "cancel_retains_server": "pass",
+    "confirm_removes_exact_server": "pass",
+    "selection_returns_home": "pass_at_ui_level_direct_messages_selected_dmList_visible",
+    "other_visible_memberships_remain": "pass",
+    "reorder_after_leave": "not_passed_order_unchanged_context_menu_visible",
+    "mock_failure_feedback": "pass_named_403",
+    "mock_failure_preserves_server": "pass"
+  },
+  "orders": {
+    "before_drag": [
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "after_drag_350ms": [
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "after_drag_1000ms": [
+      "Duo Design Lab",
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "after_leave": [
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "after_post_leave_drag": [
+      "SwiftUI Collective",
+      "Hobbies, 3 servers",
+      "Home Lab",
+      "Book Club",
+      "Coffee Nerds"
+    ],
+    "non_server_rail_items_unchanged": [
+      "Direct Messages",
+      "Cinder",
+      "Fjord"
+    ]
+  },
+  "drag_assessment": {
+    "result": "Actual native drag commands dispatched, but acceptance criterion was not met. No Move context-menu action was used.",
+    "reproduction": "Fresh normal mock, Back to sidebar; fresh refs SwiftUI Collective @e12 to Duo Design Lab @e10 with 350/700/300 ms and 1000/1000/500 ms. Both return exit 0 and retain original order. After leave, Book Club @e17 to SwiftUI Collective @e10 with 600/1200/800 ms retains order and leaves context menu visible.",
+    "classification": "Native runtime symptom / possible product drag-drop or automation interaction issue; root cause unresolved. CLI dispatch success is not app success. No successful settings save observed.",
+    "recording_review": "Long-hold contact sheet visually inspected: menu appears, lifted preview moves toward Duo Design Lab, then original rail order returns."
+  },
+  "prior_attempt": {
+    "preserved_files": [
+      "RESULT-blocked.md",
+      "ui-verification-blocked.json"
+    ],
+    "receipt": {
+      "status": "blocked_device_unavailable",
+      "recorded_at": "2026-11-08T22:44:42.813884+00:00",
+      "host_id": "local",
+      "requested_device_id": "8E509496-7A33-4AF4-8E08-78218F2DF7C6",
+      "app_id": "com.saphid.duocord",
+      "app_launched": false,
+      "checks": {
+        "native_drag_order": "not_run",
+        "leave_named_confirmation": "not_run",
+        "cancel_retains_server": "not_run",
+        "confirm_removes_exact_server": "not_run",
+        "selection_returns_home": "not_run",
+        "reorder_after_leave": "not_run",
+        "mock_failure_feedback": "not_run",
+        "mock_failure_preserves_server": "not_run"
+      },
+      "tool_calls": [
+        {
+          "tool": "device_open",
+          "attempt": 1,
+          "isError": true,
+          "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+        },
+        {
+          "tool": "device_list",
+          "isError": false,
+          "observed": "Requested device absent; local iOS platform ready; no open device sessions. Different server-management device B8344F4C-70CD-43A9-8FB4-7B5481C11723 listed; not opened."
+        },
+        {
+          "tool": "device_open",
+          "attempt": 2,
+          "isError": true,
+          "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+        }
+      ],
+      "cli_commands": [],
+      "cli_exit_statuses": [],
+      "screenshots_captured": [],
+      "video_captured": false,
+      "product_bug_identified": false,
+      "limits": [
+        "Stopped after repeated device_open failure per device boundary.",
+        "No native UI behavior observed; no test may be treated as passed.",
+        "No app launch, simulator input, build, source edit, live Discord action or subagent work performed."
+      ],
+      "cleanup": "No device session opened; nothing to close."
+    }
+  },
+  "tool_calls": [
+    {
+      "tool": "device_open",
+      "hostId": "local",
+      "deviceId": "B8344F4C-70CD-43A9-8FB4-7B5481C11723",
+      "isError": false,
+      "purpose": "initial session"
+    },
+    {
+      "tool": "device_screenshot",
+      "isError": false,
+      "count": 3,
+      "purpose": "first app open, sidebar before longhold, injected failure"
+    },
+    {
+      "tool": "device_open",
+      "hostId": "local",
+      "deviceId": "B8344F4C-70CD-43A9-8FB4-7B5481C11723",
+      "isError": false,
+      "purpose": "prescribed recovery after missing wrapper following interruption"
+    },
+    {
+      "tool": "device_close",
+      "hostId": "local",
+      "deviceId": "B8344F4C-70CD-43A9-8FB4-7B5481C11723",
+      "shutdown": false,
+      "isError": false
+    }
+  ],
+  "cli_commands": [
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device install com.saphid.duocord /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/build/server-management/gui-products/DuocordNative.app",
+      "exit_code": 0,
+      "observation": "Installed: com.saphid.duocord. This preceded the first app open."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device help gesture",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device open com.saphid.duocord --relaunch --launch-args=-DuocordMock --launch-args=YES",
+      "exit_code": 0,
+      "observation": "Opened; asynchronous exec session 57630 completed exit 0."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Fictional-data banner and general conversation visible; Back @e5."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e5 --settle",
+      "exit_code": 0,
+      "observation": "Compact sidebar revealed; Duo Design Lab selected."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/before-order.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record start --scope device /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/native-drag.mp4",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "SwiftUI Collective @e12, Duo Design Lab @e10."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device gesture drag @e12 @e10 350 700 300",
+      "exit_code": 0,
+      "observation": "Dragged @e12 to @e10; no resulting order change."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Order unchanged: Duo Design Lab, SwiftUI Collective, Hobbies, 3 servers, Home Lab, Book Club, Coffee Nerds"
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-order.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record stop",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record start --scope device /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/native-drag-longhold.mp4",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Fresh same source and destination refs."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device gesture drag @e12 @e10 1000 1000 500",
+      "exit_code": 0,
+      "observation": "Dragged @e12 to @e10; recording shows context menu, moving lifted preview, then original order."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Order unchanged: Duo Design Lab, SwiftUI Collective, Hobbies, 3 servers, Home Lab, Book Club, Coffee Nerds"
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-order-longhold.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record stop",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device help press",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e10 --hold-ms 700 --settle",
+      "exit_code": 0,
+      "observation": "Duo Design Lab context menu opened; Leave Server @e81~s473720."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e81~s473720 --settle",
+      "exit_code": 0,
+      "observation": "Named confirmation for Duo Design Lab."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Leave ‘Duo Design Lab’? Cancel @e73, Leave Server @e74."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/leave-confirmation.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e73 --settle",
+      "exit_code": 0,
+      "observation": "Cancel dismissed confirmation; Duo Design Lab retained and selected."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-cancel.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device help longpress",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Duo Design Lab retained at @e10 and selected."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device longpress @e10 800 --settle",
+      "exit_code": 0,
+      "observation": "Context menu opened."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e81~s473728 --settle",
+      "exit_code": 0,
+      "observation": "Second named confirmation opened."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Duo Design Lab still selected; Leave Server @e74."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e74 --settle",
+      "exit_code": 0,
+      "observation": "Duo Design Lab removed; Direct Messages selected and dmList visible."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-leave.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Remaining order: SwiftUI Collective, Hobbies, 3 servers, Home Lab, Book Club, Coffee Nerds. Book Club @e17, SwiftUI Collective @e10."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record start --scope device /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/post-leave-drag.mp4",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device gesture drag @e17 @e10 600 1200 800",
+      "exit_code": 0,
+      "observation": "Dragged @e17 to @e10; order unchanged, context menu visible afterward."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Remaining order unchanged; context menu visible."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-post-leave-drag.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device record stop",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device open com.saphid.duocord --relaunch --launch-args=-DuocordMock --launch-args=YES --launch-args=-DuocordMockServerFail --launch-args=YES",
+      "exit_code": 0,
+      "observation": "Fresh fictional mock; original server restored."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "general conversation visible."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e5 --settle",
+      "exit_code": 0,
+      "observation": "Sidebar; Duo Design Lab selected."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device longpress @e10~s473743 800 --settle",
+      "exit_code": 0,
+      "observation": "Context menu."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e81~s473745 --settle",
+      "exit_code": 0,
+      "observation": "Named confirmation."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Leave Server @e74."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e74 --settle",
+      "exit_code": 0,
+      "observation": "Server Action alert: Couldn’t confirm leaving Duo Design Lab. Discord returned 403: Missing Permissions The server list will update when Discord confirms your membership."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/failure.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 127,
+      "observation": "After turn interruption, bound wrapper missing; no device input dispatched."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device open com.saphid.duocord --launch-args=-DuocordMock --launch-args=YES --launch-args=-DuocordMockServerFail --launch-args=YES",
+      "exit_code": 0,
+      "observation": "After successful device_open recovery, existing failure alert preserved; no relaunch flag."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device snapshot -i",
+      "exit_code": 0,
+      "observation": "Failure alert still present; Duo Design Lab selected."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device press @e73 --settle",
+      "exit_code": 0,
+      "observation": "Dismissed failure alert; Duo Design Lab retained."
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device screenshot /Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-failure.png",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device help close",
+      "exit_code": 0,
+      "observation": ""
+    },
+    {
+      "command": "/Users/saphid/.t3/userdata/device/targets/t3-e9f9b5d858a82f31e782936a/agent-device close com.saphid.duocord",
+      "exit_code": 0,
+      "observation": "Closed: t3-e9f9b5d858a82f31e782936a"
+    }
+  ],
+  "receipt_method": "Commands/exits transcribed from observed tool responses; not an uninterrupted raw log. Function-store state was lost across turn interruption. One orchestration attempt also formed undefined snapshot -i before discovering store loss; it did not use a device command and its process result was not retained because script then threw TypeError.",
+  "artifacts": [
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/before-order.png",
+      "bytes": 65825,
+      "sha256": "2a773e9a9b22f21a90e17ffc32ee1b609f2c48dd934b4b7a934d9d063e55e627"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-order.png",
+      "bytes": 65844,
+      "sha256": "083a15e51d030eb0909c33a5ba85f3d40a0ef1c92bc3147e5f838fb5b7d5681e"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-order-longhold.png",
+      "bytes": 65844,
+      "sha256": "083a15e51d030eb0909c33a5ba85f3d40a0ef1c92bc3147e5f838fb5b7d5681e"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/leave-confirmation.png",
+      "bytes": 89843,
+      "sha256": "067ed5d489df434b1bd5189ba743fff55177d08b612886457fbda8e2a33bc964"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-cancel.png",
+      "bytes": 65668,
+      "sha256": "883e11d1ab39cae742b257058eb2cdbde1b38174cc49fdb2054981886a3920f6"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-leave.png",
+      "bytes": 53890,
+      "sha256": "897724677b27656b5fc5d6c0aae95a2ee189f732e143d82b33d48bdf06783be8"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-post-leave-drag.png",
+      "bytes": 93639,
+      "sha256": "a25be00c14db4983cffdc0e0310d412338dd6a4f6115943b7b28c831e91dc805"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/failure.png",
+      "bytes": 89917,
+      "sha256": "a0a85fc9df72f0e363a557a630e7f1e6fccb084147b6056c20cd0ab05d5a1f85"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/after-failure.png",
+      "bytes": 65855,
+      "sha256": "4fa1e2849e948a1000565e295644a7f9212709f619e31fcf5bee621ea6a9b1d7"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/native-drag.mp4",
+      "bytes": 1204554,
+      "sha256": "09a3f036cce7f04af4988292a71d5258e0d9b934f9060a1f4ffd9d1007b83ed4"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/native-drag-longhold.mp4",
+      "bytes": 2248880,
+      "sha256": "9f384f1492c1c7d7f1ea9a2bb260ccbc1487ec07b5eaf6054d3c7055fc2db4c9"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/post-leave-drag.mp4",
+      "bytes": 2922445,
+      "sha256": "103208cdeccb0e120c96c7635313210ccac37d69d0b75c60bf1e25ac7069affd"
+    },
+    {
+      "path": "/Users/saphid/.t3/worktrees/duocord-native/t3-bfaec7a0/docs/proof/server-management/drag-contact-sheet.png",
+      "bytes": 399544,
+      "sha256": "259fc28c415ba1c9c6ea78069d779775ab647017c5f0e05eb3245585cf4791be"
+    }
+  ],
+  "limits": [
+    "Native drag order change and mock-settings save remain unproven; do not sign off native drag.",
+    "Home return observed as Direct Messages selected and dmList replacing server channels; literal Home detail label not visible on compact sidebar.",
+    "Other memberships checked by visible rail labels and Hobbies folder count; folder contents not expanded.",
+    "Injected failure verified for leave only; reorder failure path not separately exercised.",
+    "No source edits, builds, subagents, commits, PR actions, uploads or live Discord writes performed."
+  ],
+  "cleanup": "Completed: own app/session closed exit 0; own Device panel attachment removed with shutdown=false. No simulator shutdown or shared cleanup."
+}

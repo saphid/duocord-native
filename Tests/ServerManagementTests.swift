@@ -1,4 +1,5 @@
 import XCTest
+import UniformTypeIdentifiers
 @testable import DuocordNative
 
 @MainActor
@@ -9,6 +10,12 @@ final class ServerManagementTests: XCTestCase {
         let subject = AppModel(readAPI: mock)
         subject.store.apply(ready: mock.readyPayload())
         return (subject, mock)
+    }
+
+    func testServerDragTypeIsExportedByApplicationBundle() throws {
+        let declarations = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "UTExportedTypeDeclarations") as? [[String: Any]])
+        let declaration = try XCTUnwrap(declarations.first { $0["UTTypeIdentifier"] as? String == UTType.duocordServerMove.identifier })
+        XCTAssertTrue((declaration["UTTypeConformsTo"] as? [String])?.contains(UTType.data.identifier) == true)
     }
 
     func testReorderPersistsAndKeepsFolderMetadataAndMemberships() async throws {
