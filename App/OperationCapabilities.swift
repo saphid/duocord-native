@@ -136,6 +136,7 @@ extension CapabilityDecision {
             case .ownershipRequired: return "Only the message’s author can do this."
             case .unsupportedChannel: return "This action isn’t available in this kind of channel."
             case .invalidPayload: return "Add message text or a file before sending."
+            case .contentRestricted: return "Age-restricted channels are unavailable in Duocord."
             case .accountValidationRequired(.voiceTextConnect): return "Check your voice or stage channel access with a moderator."
             case .accountValidationRequired: continue
             case .timedOut, .cooldown: break

@@ -107,7 +107,9 @@ private struct LoginWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             parent.loading = false
+            #if DEBUG
             fillSavedLogin(webView)
+            #endif
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -119,6 +121,7 @@ private struct LoginWebView: UIViewRepresentable {
         }
 
         /// Pre-fills (never submits) a login saved on this device.
+        #if DEBUG
         private func fillSavedLogin(_ webView: WKWebView) {
             guard !filled, webView.url?.host == "discord.com", webView.url?.path.hasPrefix("/login") == true,
                   let login = LoginStore.load() else { return }
@@ -156,5 +159,6 @@ private struct LoginWebView: UIViewRepresentable {
             webView.callAsyncJavaScript(script, arguments: ["e": login.email, "p": login.password, "submit": submit],
                                         in: nil, in: .defaultClient) { _ in }
         }
+        #endif
     }
 }

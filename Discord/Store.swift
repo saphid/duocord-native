@@ -599,7 +599,9 @@ final class DiscordStore {
     func threads(in parent: Snowflake) -> [Channel] {
         _ = channels // observation dependency
         guard let guild = channels[parent]?.guildID else { return [] }
-        return (threadIndex(in: guild)[parent] ?? []).filter { $0.threadMetadata?.archived != true }
+        return (threadIndex(in: guild)[parent] ?? []).filter {
+            $0.threadMetadata?.archived != true && contentAccess(to: $0).permitsContent
+        }
     }
 
     /// Every known thread under a parent, archived ones and forum posts
@@ -796,12 +798,15 @@ final class DiscordStore {
     func capability(_ operation: DiscordOperation, in channel: Channel, now: Date = Date(),
                     slowmodeHistory: SlowmodeHistory = .unknown,
                     messageAuthorID: Snowflake? = nil) -> CapabilityDecision {
-        operation.evaluate(capabilityContext(in: channel, now: now, slowmodeHistory: slowmodeHistory,
+        if contentAccess(to: channel) == .ageRestricted {
+            return .denied(.contentRestricted, .contentSafety)
+        }
+        return operation.evaluate(capabilityContext(in: channel, now: now, slowmodeHistory: slowmodeHistory,
                                             messageAuthorID: messageAuthorID))
     }
 
     func canView(_ channel: Channel) -> Bool {
-        capability(.viewChannel, in: channel).isAllowed
+        contentAccess(to: channel).permitsContent && capability(.viewChannel, in: channel).isAllowed
     }
 
     func isUnresolvedThread(_ channel: Channel) -> Bool {
@@ -1214,12 +1219,15 @@ final class DiscordStore {
     }
 
     func upsert(channel: Channel) {
+        let previous = channels[channel.id]
         deletedFactChannels.remove(channel.id)
         changedChannel(channel.id)
         var channel = channel
         // Updates omit fields the list relies on; keep the known ones.
         if let existing = channels[channel.id] {
-            if channel.type.isThread, channel.parentID == nil { channel.parentID = existing.parentID }
+            // A partial update cannot silently remove the safety label.
+            if channel.nsfw == nil { channel.nsfw = existing.nsfw }
+            if channel.parentID == nil { channel.parentID = existing.parentID }
             if channel.ownerID == nil { channel.ownerID = existing.ownerID }
             if channel.permissionOverwrites == nil { channel.permissionOverwrites = existing.permissionOverwrites }
             if channel.rateLimitPerUser == nil { channel.rateLimitPerUser = existing.rateLimitPerUser }
@@ -1247,6 +1255,9 @@ final class DiscordStore {
         if channel.member != nil { joinedThreads.insert(channel.id) }
         for user in channel.recipients ?? [] { users[user.id] = user }
         if channel.type.isPrivate { sortPrivateChannels() }
+        if previous?.nsfw != channel.nsfw || previous?.parentID != channel.parentID {
+            onPrivacyChange?()
+        }
     }
 
     /// A confirmed join or leave. Leaving also forgets the READY membership
@@ -1593,6 +1604,7 @@ final class DiscordStore {
     /// Whether a new message should raise a notification, following the
     /// guild/channel notification level and mutes.
     func shouldNotify(_ message: Message) -> Bool {
+        guard contentAccess(to: message.channelID).permitsContent else { return false }
         guard let me, message.author.id != me.id, let channel = channels[message.channelID] else { return false }
         guard !isBlocked(message.author.id), !isMuted(channel), !isMuted(guild: channel.guildID ?? 0) else { return false }
         let level = effectiveNotificationLevel(.channel(guild: channel.guildID, channel: channel.id)).level.rawValue

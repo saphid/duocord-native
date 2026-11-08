@@ -40,12 +40,18 @@ struct SettingsView: View {
                     Toggle("Notifications", isOn: $settings.notificationsEnabled)
                     Toggle("App Icon Badge", isOn: $settings.badgeEnabled)
                         .onChange(of: settings.badgeEnabled) { model.updateBadge() }
+                    #if DEBUG
                     Toggle("Stay Connected in Background", isOn: $settings.keepAlive)
                         .onChange(of: settings.keepAlive) { model.reconcileKeepAlive() }
+                    #endif
                 } header: {
                     Text("Notifications")
                 } footer: {
+                    #if DEBUG
                     Text("Duocord follows each server's notification settings. Staying connected plays silent audio so messages keep arriving while Duocord is in the background; it uses more battery.")
+                    #else
+                    Text("Duocord follows each server's notification settings while connected. Background message delivery is not guaranteed. Active voice calls use background audio.")
+                    #endif
                 }
                 Section {
                     Toggle("Voice Live Activity", isOn: $settings.liveActivity)
@@ -71,6 +77,10 @@ struct SettingsView: View {
                     Text("When iPhone Duo rests half-open like a book, servers and channels fill the left page and the conversation fills the right.")
                 }
                 Section {
+                    Link("Privacy Policy", destination: URL(string: "https://saphid.app/duocord-native/privacy")!)
+                    Text("Age-restricted channels stay hidden in Duocord, including their messages in search results and notifications.")
+                        .font(.footnote)
+                        .foregroundStyle(Color.textSecondary)
                     LabeledContent("Account Risk") {
                         Text("Unofficial client").foregroundStyle(.orange)
                     }

@@ -14,7 +14,9 @@ struct MainView: View {
 
     var body: some View {
         @Bindable var model = model
-        Group {
+        VStack(spacing: 0) {
+            if model.isMock { demoBanner }
+            Group {
             if isTableTop {
                 // Table-top: no split view, so no navigation control in the top
                 // half; the deck's Servers button brings up the server list.
@@ -31,6 +33,7 @@ struct MainView: View {
             } else {
                 splitView
             }
+            }
         }
         .onChange(of: sizeClass, initial: true) { _, newValue in
             let compact = newValue != .regular
@@ -45,6 +48,17 @@ struct MainView: View {
         }
         .overlay(alignment: .top) { ConnectionBanner() }
         .onAppear { Perf.shared.markOnce("mainViewAppear") }
+    }
+
+    private var demoBanner: some View {
+        HStack {
+            Text("Demo · Fictional data").font(.footnote)
+            Spacer()
+            Button("Exit Demo") { model.signOut() }
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(Color.chatBackground)
+        .accessibilityIdentifier("demoBanner")
     }
 
     private var splitView: some View {
@@ -104,7 +118,11 @@ struct DetailColumn: View {
         @Bindable var model = model
         Group {
             if let channelID = model.selectedChannel, let channel = model.store.channel(channelID) {
-                if channel.type.isForumLike {
+                let access = model.store.contentAccess(to: channel)
+                if !access.permitsContent {
+                    ContentUnavailableView("Content Unavailable", systemImage: "eye.slash",
+                                           description: Text(access.explanation))
+                } else if channel.type.isForumLike {
                     ForumView(channel: channel)
                 } else {
                     ChatView(channel: channel)

@@ -47,7 +47,7 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                      ("mosaic", "Mosaic"), ("nimbus", "Nimbus"), ("orbit-bot", "Orbit")]
         users = names.enumerated().map { index, name in
             User(id: Snowflake(900_000_000_000_000_100 + UInt64(index)), username: name.0, globalName: name.1,
-                 discriminator: "0", avatar: index % 5 == 4 ? nil : "mock", bot: name.0.hasSuffix("bot"))
+                 discriminator: "0", avatar: "mock", bot: name.0.hasSuffix("bot"))
         }
         let searchable: [(String, String, String?)] = [
             ("alice", "Alice", nil), ("alistair", "Alistair", "Al"), ("albatross-bot", "Albatross", nil), ("zoe", "Zoë", nil),

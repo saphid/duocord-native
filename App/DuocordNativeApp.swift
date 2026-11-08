@@ -69,7 +69,7 @@ struct RiskNoticeView: View {
                     Text("Duocord is an unofficial Discord client. It signs in with your own account through Discord's login page and then talks to Discord the way Discord's web app does.")
                     Text("Discord's Terms of Service don't allow third-party clients that use your account's token. Discord can limit, suspend or close accounts that use them.")
                         .fontWeight(.semibold)
-                    Text("Duocord never automates your account: it only does what you tap. Your token stays in this iPhone's Keychain and is sent only to Discord.")
+                    Text("Duocord sends your actions to Discord. Read receipts and typing indicators can be sent automatically while you use it; you can turn them off in Settings. Your token is stored in this device's Keychain and sent only to Discord.")
                 }
                 .font(.body)
                 .foregroundStyle(Color.textSecondary)
@@ -82,6 +82,11 @@ struct RiskNoticeView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .accessibilityIdentifier("acknowledgeRisk")
+                Button("Explore Demo") { model.startDemo() }
+                    .accessibilityIdentifier("exploreDemo")
+                Text("Explore fictional conversations without signing in. Demo changes are not sent to Discord.")
+                    .font(.footnote)
+                Link("Privacy Policy", destination: URL(string: "https://saphid.app/duocord-native/privacy")!)
             }
             .padding(28)
             .frame(maxWidth: 560)
@@ -120,6 +125,9 @@ struct WelcomeView: View {
             .controlSize(.large)
             .padding(.horizontal, 28)
             .accessibilityIdentifier("signIn")
+            Button("Explore Demo") { model.startDemo() }
+                .accessibilityIdentifier("exploreDemo")
+            Link("Privacy Policy", destination: URL(string: "https://saphid.app/duocord-native/privacy")!)
             Text("You'll sign in on Discord's own page, so captcha and two-factor work as usual.")
                 .font(.footnote)
                 .foregroundStyle(Color.textMuted)
@@ -131,7 +139,9 @@ struct WelcomeView: View {
         .background(Color.chatBackground.ignoresSafeArea())
         .onAppear {
             // An owner-provisioned install opens Discord's login straight away.
+            #if DEBUG
             if UserDefaults.standard.bool(forKey: LoginStore.autoSignInKey) { showLogin = true }
+            #endif
         }
         .sheet(isPresented: $showLogin) {
             LoginSheet { credentials in

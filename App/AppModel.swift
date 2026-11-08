@@ -341,6 +341,8 @@ final class AppModel {
     @ObservationIgnored let voice: VoiceController
     @ObservationIgnored let notifications: NotificationService
     @ObservationIgnored let keepAlive = BackgroundKeepAlive()
+    /// Clears real account data on sign-out; exiting the demo preserves it.
+    @ObservationIgnored var storedSessionClearer: () -> Void = { SessionStore.clear(); SnapshotCache.clear() }
     @ObservationIgnored private(set) var credentials: SessionCredentials?
     @ObservationIgnored var isActive = true
 
@@ -364,7 +366,16 @@ final class AppModel {
         }
         self.store.onMessageCreate = { [weak self] message in self?.received(message) }
         self.store.onPeopleReset = { [weak self] in self?.people.reset() }
-        self.store.onPrivacyChange = { [weak self] in self?.messages.invalidatePrivacy() }
+        self.store.onPrivacyChange = { [weak self] in
+            guard let self else { return }
+            self.messages.invalidatePrivacy()
+            if let channel = self.selectedChannel, !self.store.contentAccess(to: channel).permitsContent {
+                self.resetPresentations()
+            }
+            if let channel = self.voice.call?.channelID, !self.store.contentAccess(to: channel).permitsContent {
+                self.voice.leave()
+            }
+        }
         self.store.onAcceptedRead = { [weak self] channel, boundary in
             guard let self else { return }
             self.notifications.clear(channel: channel, through: boundary, store: self.store)
@@ -440,10 +451,10 @@ final class AppModel {
     func start() {
         if injectedMock != nil { startMock(); return }
         Perf.shared.markOnce("appStart")
+        #if DEBUG
         if let provision = LoginStore.importProvisioningFile(), provision.acknowledgeRisk == true {
             settings.acknowledgedRisk = true
         }
-        #if DEBUG
         if UserDefaults.standard.bool(forKey: "DuocordResetSession") { SessionStore.clear() }
         // Screenshots of the first-run screens without touching the session.
         if let screen = UserDefaults.standard.string(forKey: "DuocordShowScreen") {
@@ -505,8 +516,7 @@ final class AppModel {
         Task { await gateway?.disconnect() }
         self.gateway = nil
         voice.leave()
-        SessionStore.clear()
-        SnapshotCache.clear()
+        if !isMock { storedSessionClearer() }
         credentials = nil
         store.reset()
         messages.reset()
@@ -521,9 +531,16 @@ final class AppModel {
         collapsedThreadParents = []
         unreadMarkers = [:]
         api = OfflineAPI()
-        phase = .signedOut
+        phase = settings.acknowledgedRisk ? .signedOut : .riskNotice
+        isMock = false
         keepAlive.stop()
         notifications.setBadge(0)
+    }
+
+    /// Fictional local data; no account or service connection is created.
+    func startDemo() {
+        guard phase != .signedIn else { return }
+        startMock()
     }
 
     private func startMock() {
@@ -534,7 +551,6 @@ final class AppModel {
         connect(MockGateway(data: mock))
         phase = .signedIn
         restoreNavigation()
-        notifications.requestAuthorizationIfNeeded()
     }
 
     private func connect(_ gateway: GatewayConnection) {
@@ -691,6 +707,10 @@ final class AppModel {
             resolveParentAndSelect(info, intent: navigationIntent)
             return
         }
+        guard store.contentAccess(to: channel).permitsContent else {
+            showError(store.contentAccess(to: channel).explanation)
+            return
+        }
         Perf.shared.begin("channelSwitch")
         if sheet == .servers { sheet = nil }
         if let previous = selectedChannel, previous != channel, !isMock, let timeline = messages.existingTimeline(for: previous), timeline.isAtLatest {
@@ -770,7 +790,7 @@ final class AppModel {
             resolveParentAndSelect(info, intent: navigationIntent, message: message)
         } else {
             select(channel: channel)
-            if let message { revealRequest = (channel, message, UUID()) }
+            if selectedChannel == channel, let message { revealRequest = (channel, message, UUID()) }
         }
     }
 
@@ -789,11 +809,18 @@ final class AppModel {
     }
 
     private func saveNavigation() {
+        guard !isMock else { return }
         UserDefaults.standard.set(selectedGuild?.description, forKey: "nav.guild")
         UserDefaults.standard.set(selectedChannel?.description, forKey: "nav.channel")
     }
 
     private func restoreNavigation() {
+        if isMock {
+            selectedGuild = MockDiscord.ThreadFixture.guild
+            selectedChannel = MockDiscord.generalChannel
+            store.visibleChannel = selectedChannel
+            return
+        }
         selectedGuild = UserDefaults.standard.string(forKey: "nav.guild").flatMap(Snowflake.init)
         if let channel = UserDefaults.standard.string(forKey: "nav.channel").flatMap(Snowflake.init) {
             selectedChannel = channel

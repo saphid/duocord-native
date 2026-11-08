@@ -28,7 +28,7 @@ struct MessageResultRow: View {
                     if let user = content.avatarUser { AvatarView(user: user, size: 36) }
                     VStack(alignment: .leading, spacing: 3) {
                         if content.concealed {
-                            Text("Blocked user").font(.subheadline.weight(.semibold)).foregroundStyle(Color.textMuted)
+                            Text(content.restricted ? "Content unavailable" : "Blocked user").font(.subheadline.weight(.semibold)).foregroundStyle(Color.textMuted)
                         } else {
                             HStack(spacing: 6) {
                                 Text(store.displayName(for: message.author, in: guild))
@@ -39,7 +39,7 @@ struct MessageResultRow: View {
                                     .font(.caption).foregroundStyle(Color.textMuted).lineLimit(1)
                             }
                         }
-                        if showChannel, let channel = store.channel(message.channelID) {
+                        if showChannel, !content.restricted, let channel = store.channel(message.channelID) {
                             Text(channelLabel(channel)).font(.caption.weight(.medium))
                                 .foregroundStyle(Color.textSecondary).lineLimit(1)
                         }
@@ -51,7 +51,7 @@ struct MessageResultRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Opens the message in its channel")
-            if content.concealed {
+            if content.concealed, !content.restricted {
                 Button("Reveal message") { reveal = content.scope }
                     .font(.subheadline).buttonStyle(.borderless)
                     .accessibilityHint("Reveals this excerpt only")
@@ -549,8 +549,14 @@ struct ForumView: View {
 
     func postPresentation(_ post: Channel, firstMessage: Message?, store: DiscordStore,
                           reveal: ExcerptRevealScope? = nil) -> ForumPostPresentation {
+        guard store.contentAccess(to: post).permitsContent else {
+            return ForumPostPresentation(title: "Content unavailable", excerpt: nil, revealScope: nil)
+        }
         if let firstMessage {
             let content = excerptPresentation(firstMessage, store: store, reveal: reveal)
+            guard !content.restricted else {
+                return ForumPostPresentation(title: "Content unavailable", excerpt: nil, revealScope: nil)
+            }
             return ForumPostPresentation(title: content.concealed ? "Blocked post" : (post.name ?? ""),
                                          excerpt: content, revealScope: content.concealed ? content.scope : nil)
         }
