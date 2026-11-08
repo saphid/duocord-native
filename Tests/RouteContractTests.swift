@@ -89,6 +89,12 @@ final class RouteContractTests: XCTestCase {
             .init(methodKey: "relationship", endpointKey: "relationship", endpoint: .relationship(u,removing:false), method: "PUT", path: "users/@me/relationships/987", run: { try await $0.relationship(user:987,action:.block) }),
             .init(methodKey: "requestFriend", endpointKey: "requestFriend", endpoint: .requestFriend, method: "POST", path: "users/@me/relationships", run: { try await $0.requestFriend(username:FriendUsername("offline.user")!) }),
             .init(methodKey: "createDM", endpointKey: "createDM", endpoint: .createDM, method: "POST", path: "users/@me/channels", run: { _ = try await $0.createDM(recipient:987) }),
+            .init(methodKey: "leaveGuild", endpointKey: "leaveGuild", endpoint: .leaveGuild(g), method: "DELETE", path: "users/@me/guilds/789", run: { try await $0.leaveGuild(789, admission: { true }) }),
+            .init(methodKey: "saveGuildFolders", endpointKey: "saveSettingsProto", endpoint: .saveSettingsProto, method: "PATCH", path: "users/@me/settings-proto/1", run: { api in
+                let settings = try GuildFolderSettings(base64: MockDiscord.versionedServerSettings(guilds: MockDiscord().guilds.map(\.id)))
+                let order = try GuildOrganization(folders: settings.folders, membershipOrder: settings.folders.flatMap(\.guildIDs))
+                _ = try await api.saveGuildFolders(settings.patch(for: order), admission: { true })
+            }),
             .init(methodKey: "settingsProto", endpointKey: "settingsProto", endpoint: .settingsProto, method: "GET", path: "users/@me/settings-proto/1", run: { _ = try await $0.settingsProto() }),
             .init(methodKey: "modifyThread", endpointKey: "modifyThread", endpoint: .modifyThread(c), method: "PATCH", path: "channels/123", run: { _ = try await $0.modifyThread(123,patch:ThreadPatch(archived:true)) }),
             .init(methodKey: "deleteThread", endpointKey: "deleteThread", endpoint: .deleteThread(c), method: "DELETE", path: "channels/123", run: { try await $0.deleteThread(123) }),

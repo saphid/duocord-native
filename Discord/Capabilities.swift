@@ -16,11 +16,13 @@ nonisolated enum CapabilityReason: Equatable, Sendable {
     case privateMembershipRequired, threadArchived, threadLocked, threadActionUnavailable, ownershipRequired
     case timedOut(until: Date), cooldown(until: Date)
     case invalidPayload
+    case contentRestricted
     case accountValidationRequired(AccountCapabilityHypothesis)
 }
 nonisolated enum CapabilityProvenance: String, Equatable, Sendable {
     case directMessage, guildOwner, administrator, roles, overwrites, implicitMask, membership
     case timeout, payload, threadPolicy, slowmode, ownership, cachedFacts, refreshedFacts, accountHypothesis
+    case contentSafety
 }
 nonisolated struct CapabilityDecision: Equatable, Sendable {
     var state: CapabilityState

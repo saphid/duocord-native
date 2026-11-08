@@ -1,3 +1,4 @@
+#if DEBUG
 import AVFoundation
 
 /// Keeps Duocord running after it leaves the screen, so the gateway connection
@@ -48,3 +49,11 @@ final class BackgroundKeepAlive {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 }
+
+#else
+/// Release builds never activate silent audio. Voice owns its own audio session.
+final class BackgroundKeepAlive {
+    func start() {}
+    func stop() {}
+}
+#endif

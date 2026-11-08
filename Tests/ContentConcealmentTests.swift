@@ -211,9 +211,12 @@ final class ContentConcealmentTests: XCTestCase {
 
     func testForumBlockedOwnerWithoutFirstMessageConcealsTitleAndCanReveal() throws {
         let (store, message) = fixture()
-        let forum = ForumView(channel: Channel(id: 9000, type: .forum))
+        let forumChannel = Channel(id: 9000, type: .forum)
+        store.upsert(channel: forumChannel)
+        let forum = ForumView(channel: forumChannel)
         var post = Channel(id: 9001, type: .publicThread, name: "recognizable blocked title", parentID: 9000)
         post.ownerID = message.author.id
+        store.upsert(channel: post)
         let hidden = forum.postPresentation(post, firstMessage: nil, store: store)
         XCTAssertEqual(hidden.title, "Blocked post")
         XCTAssertNil(hidden.excerpt)
@@ -230,9 +233,12 @@ final class ContentConcealmentTests: XCTestCase {
 
     func testForumOwnerRevealInvalidatesOnIdentityRelationshipAndSessionChanges() throws {
         let (store, message) = fixture()
-        let forum = ForumView(channel: Channel(id: 9000, type: .forum))
+        let forumChannel = Channel(id: 9000, type: .forum)
+        store.upsert(channel: forumChannel)
+        let forum = ForumView(channel: forumChannel)
         var post = Channel(id: 9001, type: .publicThread, name: "private title", parentID: 9000)
         post.ownerID = message.author.id
+        store.upsert(channel: post)
         let scope = try XCTUnwrap(forum.postPresentation(post, firstMessage: nil, store: store).revealScope)
         var other = post; other.id = 9002
         XCTAssertEqual(forum.postPresentation(other, firstMessage: nil, store: store, reveal: scope).title, "Blocked post")
@@ -247,14 +253,19 @@ final class ContentConcealmentTests: XCTestCase {
         XCTAssertEqual(forum.postPresentation(post, firstMessage: nil, store: store, reveal: scope).title, "Blocked post")
         let renewed = try XCTUnwrap(forum.postPresentation(post, firstMessage: nil, store: store).revealScope)
         store.apply(ready: MockDiscord().readyPayload())
+        store.upsert(channel: forumChannel)
+        store.upsert(channel: post)
         XCTAssertEqual(forum.postPresentation(post, firstMessage: nil, store: store, reveal: renewed).title, "Blocked post")
     }
 
     func testForumFallbackRevealCannotRevealNewFirstMessage() throws {
         let (store, original) = fixture()
-        let forum = ForumView(channel: Channel(id: 9000, type: .forum))
+        let forumChannel = Channel(id: 9000, type: .forum)
+        store.upsert(channel: forumChannel)
+        let forum = ForumView(channel: forumChannel)
         var post = Channel(id: 9001, type: .publicThread, name: "private title", parentID: 9000)
         post.ownerID = original.author.id
+        store.upsert(channel: post)
         let ownerScope = forum.postPresentation(post, firstMessage: nil, store: store).revealScope
         var first = original; first.id = post.id; first.channelID = post.id
         let hidden = forum.postPresentation(post, firstMessage: first, store: store, reveal: ownerScope)

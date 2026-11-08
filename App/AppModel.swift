@@ -90,6 +90,7 @@ final class AppModel {
     private(set) var isMock = false
 
     // Navigation
+    let servers = ServerManagement()
     let people = PeopleOperations()
     let threads = ThreadOperations()
     @ObservationIgnored var navigationIntent = UUID()
@@ -341,6 +342,8 @@ final class AppModel {
     @ObservationIgnored let voice: VoiceController
     @ObservationIgnored let notifications: NotificationService
     @ObservationIgnored let keepAlive = BackgroundKeepAlive()
+    /// Clears real account data on sign-out; exiting the demo preserves it.
+    @ObservationIgnored var storedSessionClearer: () -> Void = { SessionStore.clear(); SnapshotCache.clear() }
     @ObservationIgnored private(set) var credentials: SessionCredentials?
     @ObservationIgnored var isActive = true
 
@@ -364,7 +367,16 @@ final class AppModel {
         }
         self.store.onMessageCreate = { [weak self] message in self?.received(message) }
         self.store.onPeopleReset = { [weak self] in self?.people.reset() }
-        self.store.onPrivacyChange = { [weak self] in self?.messages.invalidatePrivacy() }
+        self.store.onPrivacyChange = { [weak self] in
+            guard let self else { return }
+            self.messages.invalidatePrivacy()
+            if let channel = self.selectedChannel, !self.store.contentAccess(to: channel).permitsContent {
+                self.resetPresentations()
+            }
+            if let channel = self.voice.call?.channelID, !self.store.contentAccess(to: channel).permitsContent {
+                self.voice.leave()
+            }
+        }
         self.store.onAcceptedRead = { [weak self] channel, boundary in
             guard let self else { return }
             self.notifications.clear(channel: channel, through: boundary, store: self.store)
@@ -440,10 +452,10 @@ final class AppModel {
     func start() {
         if injectedMock != nil { startMock(); return }
         Perf.shared.markOnce("appStart")
+        #if DEBUG
         if let provision = LoginStore.importProvisioningFile(), provision.acknowledgeRisk == true {
             settings.acknowledgedRisk = true
         }
-        #if DEBUG
         if UserDefaults.standard.bool(forKey: "DuocordResetSession") { SessionStore.clear() }
         // Screenshots of the first-run screens without touching the session.
         if let screen = UserDefaults.standard.string(forKey: "DuocordShowScreen") {
@@ -505,8 +517,7 @@ final class AppModel {
         Task { await gateway?.disconnect() }
         self.gateway = nil
         voice.leave()
-        SessionStore.clear()
-        SnapshotCache.clear()
+        if !isMock { storedSessionClearer() }
         credentials = nil
         store.reset()
         messages.reset()
@@ -521,9 +532,16 @@ final class AppModel {
         collapsedThreadParents = []
         unreadMarkers = [:]
         api = OfflineAPI()
-        phase = .signedOut
+        phase = settings.acknowledgedRisk ? .signedOut : .riskNotice
+        isMock = false
         keepAlive.stop()
         notifications.setBadge(0)
+    }
+
+    /// Fictional local data; no account or service connection is created.
+    func startDemo() {
+        guard phase != .signedIn else { return }
+        startMock()
     }
 
     private func startMock() {
@@ -534,7 +552,6 @@ final class AppModel {
         connect(MockGateway(data: mock))
         phase = .signedIn
         restoreNavigation()
-        notifications.requestAuthorizationIfNeeded()
     }
 
     private func connect(_ gateway: GatewayConnection) {
@@ -625,6 +642,10 @@ final class AppModel {
                 automaticReadCeilings[channel] = nil
             }
             updateBadge()
+        case "GUILD_DELETE":
+            if let deleted = try? dispatch.decode(GuildDelete.self), deleted.unavailable != true {
+                removeServerLocally(deleted.id)
+            } else { store.handle(dispatch) }
         case "CHANNEL_DELETE", "THREAD_DELETE":
             // Whoever deleted it, the open conversation falls back to its parent.
             let selected = selectedChannel.flatMap { store.channel($0) }
@@ -689,6 +710,10 @@ final class AppModel {
         }
         if let info = store.channel(channel), store.isUnresolvedThread(info) {
             resolveParentAndSelect(info, intent: navigationIntent)
+            return
+        }
+        guard store.contentAccess(to: channel).permitsContent else {
+            showError(store.contentAccess(to: channel).explanation)
             return
         }
         Perf.shared.begin("channelSwitch")
@@ -770,8 +795,26 @@ final class AppModel {
             resolveParentAndSelect(info, intent: navigationIntent, message: message)
         } else {
             select(channel: channel)
-            if let message { revealRequest = (channel, message, UUID()) }
+            if selectedChannel == channel, let message { revealRequest = (channel, message, UUID()) }
         }
+    }
+
+    func removeServerLocally(_ guild: Snowflake) {
+        let channels = Set(store.channels.values.filter { $0.guildID == guild }.map(\.id))
+        for payload in Array(outgoing.values) where channels.contains(payload.echo.channelID) { discard(payload.echo) }
+        for channel in channels {
+            ackTasks.removeValue(forKey: channel)?.cancel()
+            drafts[channel] = nil; stashedDrafts[channel] = nil; anchors[channel] = nil
+            unreadMarkers[channel] = nil; unreadTargets[channel] = nil; automaticReadCeilings[channel] = nil
+        }
+        messages.removeChannels(channels)
+        if voice.call?.guildID == guild || voice.joining.map({ channels.contains($0) }) == true { voice.leave() }
+        let data = try! JSONEncoder().encode(["d": ["id": guild.description]])
+        store.handle(GatewayDispatch(name: "GUILD_DELETE", data: data))
+        if selectedGuild == guild { selectedGuild = nil }
+        validateSelection()
+        if servers.confirmation?.guild == guild { servers.confirmation = nil }
+        saveNavigation(); saveCache(); updateBadge()
     }
 
     private func validateSelection() {
@@ -789,11 +832,18 @@ final class AppModel {
     }
 
     private func saveNavigation() {
+        guard !isMock else { return }
         UserDefaults.standard.set(selectedGuild?.description, forKey: "nav.guild")
         UserDefaults.standard.set(selectedChannel?.description, forKey: "nav.channel")
     }
 
     private func restoreNavigation() {
+        if isMock {
+            selectedGuild = MockDiscord.ThreadFixture.guild
+            selectedChannel = MockDiscord.generalChannel
+            store.visibleChannel = selectedChannel
+            return
+        }
         selectedGuild = UserDefaults.standard.string(forKey: "nav.guild").flatMap(Snowflake.init)
         if let channel = UserDefaults.standard.string(forKey: "nav.channel").flatMap(Snowflake.init) {
             selectedChannel = channel
@@ -1094,6 +1144,7 @@ final class AppModel {
 
     private func beginAccountGeneration() {
         accountGeneration = UUID()
+        servers.reset()
         let waiters = readyWaiters
         readyWaiters = [:]
         waiters.values.forEach { $0.resume(returning: false) }

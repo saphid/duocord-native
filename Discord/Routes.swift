@@ -26,6 +26,7 @@ nonisolated enum DiscordEndpoint: Sendable {
     case pin(ChannelID, MessageID, pinned: Bool), attachments(ChannelID), ack(ChannelID, MessageID), ackBulk, guildAck(GuildID)
     case typing(ChannelID), reaction(ChannelID, MessageID, emoji: String, add: Bool), reactions(ChannelID, MessageID, emoji: String)
     case notificationSettings(GuildID?), relationship(UserID, removing: Bool), requestFriend, createDM, settingsProto
+    case saveSettingsProto, leaveGuild(GuildID)
     case modifyThread(ChannelID), deleteThread(ChannelID), joinThread(ChannelID), leaveThread(ChannelID), threadSettings(ChannelID)
 
     var descriptor: DiscordRoute {
@@ -58,6 +59,8 @@ nonisolated enum DiscordEndpoint: Sendable {
         case .relationship(let u, let removing): return route(removing ? "DELETE" : "PUT", [.word("users/@me/relationships"), .user(u)], "relationship", u.description)
         case .requestFriend: return route("POST", [.word("users/@me/relationships")], "friend-request")
         case .createDM: return route("POST", [.word("users/@me/channels")], "create-dm")
+        case .saveSettingsProto: return route("PATCH", [.word("users/@me/settings-proto/1")], "settings")
+        case .leaveGuild(let g): return route("DELETE", [.word("users/@me/guilds"), .guild(g)], "leave-guild", g.description)
         case .settingsProto: return route("GET", [.word("users/@me/settings-proto/1")], "settings")
         case .modifyThread(let c): return route("PATCH", [.word("channels"), .channel(c)], "thread", c.description)
         case .deleteThread(let c): return route("DELETE", [.word("channels"), .channel(c)], "thread", c.description)

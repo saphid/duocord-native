@@ -36,6 +36,10 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIBackgroundModes: [audio]
         UIApplicationSupportsMultipleScenes: false
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.saphid.duocord.server-move
+            UTTypeConformsTo: [public.data]
+            UTTypeDescription: Duocord server move
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.saphid.duocord
@@ -86,7 +90,29 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuocordNative.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DuocordNative
         BUNDLE_LOADER: $(TEST_HOST)
+  DuocordAppStoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests/AppStoreReadinessTests.swift
+      - Tests/ContentSafetyTests.swift
+      - Tests/ContentReportTests.swift
+    dependencies:
+      - target: DuocordNative
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/DuocordNative.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/DuocordNative
+        BUNDLE_LOADER: $(TEST_HOST)
 schemes:
+  DuocordAppStoreReadiness:
+    build:
+      targets:
+        DuocordNative: all
+    test:
+      config: Release
+      targets:
+        - DuocordAppStoreTests
   DuocordNative:
     build:
       targets:

@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "build": "202611082353",
+  "pr": "https://github.com/saphid/duocord-native/pull/39",
+  "merged_source": "b407370e89bf33fc78b9254a605fdbc16ef78a99",
+  "source_manifest_sha256": "eca31890c58f660713b4adacbf66c586846d0b1b5f73ccd577c4d3866a5b5296",
+  "source_inputs": 93,
+  "delivery": {
+    "app_id": "6829036831",
+    "bundle_id": "com.saphid.duocord",
+    "build": "202611082353",
+    "build_id": "7bf54c83-21d9-46a6-aa06-26516b923706",
+    "processing_state": "VALID",
+    "internal_state": "IN_BETA_TESTING",
+    "groups": [
+      {
+        "id": "f3217a3b-fcc8-44f4-b888-2ba4ae058b6a",
+        "name": "Alex"
+      },
+      {
+        "id": "1bb1f712-b8a4-4776-be6d-2a41d0f6274e",
+        "name": "t3crew"
+      },
+      {
+        "id": "a4263d3a-a78d-41d0-a651-a602bbc27220",
+        "name": "DuoCrew"
+      }
+    ]
+  },
+  "identity_verification": {
+    "identity": [
+      {
+        "bundle_id": "com.saphid.duocord",
+        "version": "1.0",
+        "build": "202611082353",
+        "team": "NJZUMEA4BN",
+        "application_identifier": "NJZUMEA4BN.com.saphid.duocord",
+        "get_task_allow": false,
+        "codesign_verify_exit": 0
+      },
+      {
+        "bundle_id": "com.saphid.duocord.LiveActivity",
+        "version": "1.0",
+        "build": "202611082353",
+        "team": "NJZUMEA4BN",
+        "application_identifier": "NJZUMEA4BN.com.saphid.duocord.LiveActivity",
+        "get_task_allow": false,
+        "codesign_verify_exit": 0
+      }
+    ],
+    "ipa_sha256": "164c63016d53873d19a8397dce541df11e910b04c972a44eed0ca35e8570f33d",
+    "export_exit": 0,
+    "source_hashes_match": 93
+  },
+  "verification": {
+    "focused_tests": 27,
+    "focused_failures": 0,
+    "earlier_filtered_suite": {
+      "methods": 851,
+      "skipped": 2,
+      "failures": 0,
+      "baseline_failures_excluded": 7
+    },
+    "native_mock_ui": "PASS: drag,Cancel,leave/DM return,post-leave drag,refused order retained",
+    "review": "3 Sol-loop rounds; full feature round2 and four-file native fix round3 approved; fresh same-model instances",
+    "limits": "Mock-only UI proof; live Discord writes and cross-launch persistence not tested"
+  },
+  "public_readme_and_delivery_preserved_from": "b4b6a14df80d0a8e66222c040655bece4549eade"
+}

@@ -32,17 +32,20 @@ struct ExcerptRevealScope: Equatable {
 struct MessageExcerptPresentation {
     let scope: ExcerptRevealScope
     let concealed: Bool
+    let restricted: Bool
     let avatarUser: User?
     let segments: [MarkdownRenderer.Segment]
     let fallback: String
 
     init(message: Message, store: DiscordStore, reveal: ExcerptRevealScope?) {
         scope = ExcerptRevealScope(message: message, store: store)
-        concealed = store.isBlocked(message.author.id) && reveal != scope
+        let access = store.contentAccess(to: message.channelID)
+        restricted = !access.permitsContent
+        concealed = restricted || (store.isBlocked(message.author.id) && reveal != scope)
         avatarUser = concealed ? nil : message.author
         guard !concealed else {
             segments = []
-            fallback = "Blocked message"
+            fallback = restricted ? access.explanation : "Blocked message"
             return
         }
         let context = MessageBuilder(store: store, guildID: message.guildID).context(font: Theme.font(15))

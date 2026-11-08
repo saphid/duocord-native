@@ -196,6 +196,7 @@ final class NotificationService: NSObject {
     /// Title = sender, subtitle = "#channel · Server" (or the group name),
     /// body = the message as plain text; grouped by channel.
     func post(message: Message, store: DiscordStore) {
+        guard store.contentAccess(to: message.channelID).permitsContent else { return }
         guard !store.isBlocked(message.author.id) else { return }
         #if DEBUG
         if let mockPostObserver { mockPostObserver(message.id); return }

@@ -36,6 +36,7 @@ final class VoiceController {
     var isDeafened: Bool { model?.store.myVoiceState?.selfDeaf ?? false }
 
     func canJoin(_ channel: Channel) -> Bool {
+        guard model?.store.contentAccess(to: channel).permitsContent == true else { return false }
         #if DEBUG
         return channel.id == Self.debugAllowedChannel
         #else

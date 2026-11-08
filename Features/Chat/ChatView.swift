@@ -82,15 +82,15 @@ struct ChatView: View {
         }
         if !model.isTableTop {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                // A horizontal bar (inner portrait), or a side bar shortened by
-                // the keyboard: secondary items fold into More so Search,
-                // Members and Inbox (with its badge) always stay visible.
-                if shortSideBar {
-                    // The outer display's side bar is shortest with the keyboard
-                    // up: Back, More and Inbox only.
+                // Compact horizontal bars need room for the conversation title.
+                // Put secondary actions in More; keep Inbox and its badge visible.
+                if condensedBar {
+                    // Compact horizontal bars, and vertical bars shortened by
+                    // the keyboard: Back, More and Inbox only.
                     Menu("More", systemImage: "ellipsis") {
                         ChannelActionsMenu(channel: channel)
                         Button("Search", systemImage: "magnifyingglass") { model.present(.search) }
+                            .keyboardShortcut("f")
                         if channel.guildID != nil {
                             Button("Members", systemImage: "person.2") { model.toggleMembers() }
                         }
@@ -119,11 +119,11 @@ struct ChatView: View {
                     Button("Pinned Messages", systemImage: panelOpen(.pins) ? "pin.fill" : "pin") { model.present(.pins) }
                 }
                 // Open pages use their filled glyph (search has none; its panel shows it).
-                if !shortSideBar {
+                if !condensedBar {
                 Button("Search", systemImage: panelOpen(.search) ? "magnifyingglass" : "magnifyingglass") { model.present(.search) }
                     .keyboardShortcut("f")
                 }
-                if channel.guildID != nil, !shortSideBar {
+                if channel.guildID != nil, !condensedBar {
                     Button(model.membersVisible ? "Hide Members" : "Show Members",
                            systemImage: model.membersVisible ? "person.2.fill" : "person.2") {
                         withAnimation(.snappy(duration: 0.25)) { model.toggleMembers() }
@@ -137,15 +137,13 @@ struct ChatView: View {
         }
     }
 
-    /// The bar runs across the top: inner portrait, and any iPad window (a
-    /// narrow iPad window is compact but has no vertical side bar, so the
-    /// side bar's layout would push Search, Members and Inbox into overflow).
-    private var horizontalBar: Bool {
-        verticalBar == nil && (!fold.isCompact || UIDevice.current.userInterfaceIdiom == .pad)
-    }
+    /// Read the actual toolbar placement: compact width alone does not mean
+    /// a vertical bar (ordinary iPhones also have compact width).
+    private var horizontalBar: Bool { verticalBar == nil }
 
-    /// The outer display's side bar with the keyboard up: room for the least.
-    private var shortSideBar: Bool { fold.isCompact && model.keyboardVisible && !horizontalBar }
+    /// Reserve title space on compact horizontal bars. A compact vertical bar
+    /// needs the same smaller action set only while the keyboard is visible.
+    private var condensedBar: Bool { fold.isCompact && (horizontalBar || model.keyboardVisible) }
 
     private var threadParent: Snowflake { channel.type.isThread ? channel.parentID ?? channel.id : channel.id }
     private var threadsOpen: Bool { if case .threads? = model.sidebarPanel { true } else { false } }
