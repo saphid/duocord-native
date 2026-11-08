@@ -4,6 +4,10 @@ Duocord is an unofficial, third-party client for Discord, for iPhone and iPad (i
 
 ## Get help
 
+For private support or content reports, email [saphid@gmail.com](mailto:saphid@gmail.com), addressed to Alex Southwell, Duocord's developer. Include a Discord message link and a brief description when relevant. Do not include tokens, passwords or unnecessary private content. Opening the email link does not submit a report; review and send it in your email app.
+
+For platform enforcement, [report directly to Discord](https://discord.com/safety/360044103651-reporting-abusive-behavior-to-discord). You can block a sender from their profile in Duocord. The developer cannot remove content from Discord's servers. For immediate threats to someone's safety, contact your local emergency service.
+
 - **Report a problem or ask a question:** [open an issue](https://github.com/saphid/duocord-native/issues). Say which device you use, your iOS version and the Duocord version (shown on the App Store and in TestFlight).
 
 Please don't post your Discord token, password, private messages or screenshots of other people's messages in public issues.
@@ -26,7 +30,7 @@ Duocord signs in to your own Discord account on Discord's own login page. Discor
 
 ## Privacy
 
-See the [privacy policy](privacy.md). The developer collects no data.
+See the [privacy policy](privacy.md). The app has no developer-run app-data backend. Information you choose to email for support is received by the developer.
 
 ## Source code
 

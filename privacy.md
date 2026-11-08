@@ -46,10 +46,14 @@ Duocord is not directed at children. Discord sets its own minimum age for accoun
 
 ## Your choices
 
-You can sign out at any time in Settings. To access, correct or delete the data in your Discord account, use Discord's own tools and [Discord's Privacy Policy](https://discord.com/privacy). The Duocord developer holds no copy of it.
+You can sign out at any time in Settings. To access, correct or delete the data in your Discord account, use Discord's own tools and [Discord's Privacy Policy](https://discord.com/privacy). The Duocord developer holds no copy of it except information you voluntarily include in support correspondence.
+
+## Support correspondence
+
+If you choose to email the developer at [saphid@gmail.com](mailto:saphid@gmail.com), your email provider delivers your sender address, message contents and any attachments you add to Alex Southwell's support mailbox. This is separate from Duocord's direct connection to Discord. Do not send account credentials or unnecessary private content. Support correspondence is held in the developer's email account to investigate and respond to requests; contact the same address to request its deletion. Opening a mail link does not send anything until you choose Send in your email app.
 
 ## Changes and contact
 
 Changes to this policy are published in this file's history in the public repository.
 
-Questions: [open an issue](https://github.com/saphid/duocord-native/issues).
+Private questions and reports: [saphid@gmail.com](mailto:saphid@gmail.com), addressed to Alex Southwell. Use [public issues](https://github.com/saphid/duocord-native/issues) only for non-sensitive reports.
