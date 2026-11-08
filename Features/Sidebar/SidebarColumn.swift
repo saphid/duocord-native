@@ -38,6 +38,15 @@ struct SidebarColumn: View {
         .background(Color.railBackground.ignoresSafeArea())
         .animation(.snappy(duration: 0.25), value: showsMembersHere)
         .animation(.snappy(duration: 0.25), value: model.sidebarPanel)
+        .alert(model.servers.confirmation.map { "Leave ‘\($0.name)’?" } ?? "Leave Server", isPresented: Binding(
+            get: { model.servers.confirmation != nil },
+            set: { if !$0 { model.dismissServerLeave() } }), presenting: model.servers.confirmation) { capture in
+                Button("Leave Server", role: .destructive) { model.confirmServerLeave(capture) }
+                Button("Cancel", role: .cancel) { model.cancelServerLeave() }
+        } message: { capture in
+            Text("You’ll need a new invitation to rejoin \(capture.name). Unsent messages and attachments in this server will be discarded.")
+        }
+
     }
 
     static func title(for panel: AppSheet) -> String {
@@ -123,6 +132,10 @@ struct ServerRail: View {
                         FolderButton(folder: folder)
                     }
                 }
+                if model.servers.busy { ProgressView().accessibilityLabel("Updating servers") }
+                Color.clear.frame(height: 28).contentShape(Rectangle())
+                    .modifier(ServerDropTarget(before: nil))
+                    .accessibilityHidden(true)
             }
             .padding(.vertical, 10)
         }
@@ -130,6 +143,10 @@ struct ServerRail: View {
         .background(Color.railBackground)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Servers")
+        .alert("Server Action", isPresented: Binding(get: { model.servers.error != nil }, set: { if !$0 { model.servers.error = nil } })) {
+            Button("OK", role: .cancel) { model.servers.error = nil }
+        } message: { Text(model.servers.error ?? "") }
+
     }
 }
 
@@ -259,7 +276,28 @@ struct GuildButton: View {
             .contextMenu {
                 Button("Mark as Read", systemImage: "checkmark.message") { model.markServerAsRead(guildID) }
                 NotificationContextMenu(target: .guild(guildID))
+                Divider()
+                Button("Move to Top", systemImage: "arrow.up.to.line") {
+                    if let first = store.sidebarItems.first {
+                        let target: Snowflake? = switch first {
+                        case .guild(let id): id
+                        case .folder(let folder): folder.guildIDs.first
+                        }
+                        model.moveServer(guildID, before: target, withinFolder: false)
+                    }
+                }
+                .disabled(model.servers.busy || !model.allowsServerWrites)
+                Button("Move to Bottom", systemImage: "arrow.down.to.line") { model.moveServer(guildID, before: nil) }
+                    .disabled(model.servers.busy || !model.allowsServerWrites)
+                Divider()
+                Button(guild.ownerID == store.me?.id ? "Transfer ownership before leaving" : "Leave Server", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+                    model.requestLeaveServer(guildID)
+                }
+                .disabled(model.servers.busy || guild.unavailable || guild.ownerID == store.me?.id || !model.allowsServerWrites)
             }
+            .modifier(ServerDragSource(guild: guildID))
+            .modifier(ServerDropTarget(before: guildID))
+            .accessibilityHint("Drag before another server to reorder. Drag before a server inside a folder to move into it.")
             .accessibilityIdentifier("guild-\(guildID)")
         }
     }

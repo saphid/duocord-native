@@ -61,6 +61,7 @@ final class DiscordStore {
         }
     }
     private(set) var guildOrder: [Snowflake] = []
+    private(set) var serverMembershipRevision = UUID()
     private(set) var folders: [GuildFolder] = []
     private(set) var channels: [Snowflake: Channel] = [:] {
         didSet { channelIndexValid = false; threadIndexCache = [:]; derivedRevision &+= 1 }
@@ -265,6 +266,7 @@ final class DiscordStore {
     private func resetReadOperations() {
         onReadReset?()
         readEpoch = UUID()
+        serverMembershipRevision = UUID()
         deletedFactChannels = []; deletedFactGuilds = []
         guildFactVersions = [:]; memberFactVersions = [:]
         readEchoes = [:]; readServerVersions = [:]; readServerFloor = nil
@@ -766,6 +768,20 @@ final class DiscordStore {
         return rest.reversed().map { .guild($0) } + items
     }
 
+    var confirmedDepartedServers: Set<Snowflake> { deletedFactGuilds }
+
+    private func withoutDepartedServers(_ rows: [GuildFolder]) -> [GuildFolder] {
+        rows.compactMap { original in
+            var row = original
+            row.guildIDs.removeAll { deletedFactGuilds.contains($0) }
+            return row.guildIDs.isEmpty ? nil : row
+        }
+    }
+
+    func applyServerFolders(_ value: GuildFolderSettings) {
+        folders = withoutDepartedServers(value.folders)
+    }
+
     var privateChannels: [Channel] {
         privateChannelOrder.compactMap { channels[$0] }
     }
@@ -1196,6 +1212,7 @@ final class DiscordStore {
     }
 
     func upsert(guild: Guild) {
+        serverMembershipRevision = UUID()
         deletedFactGuilds.remove(guild.id)
         guildFactVersions[guild.id, default: 0] &+= 1
         var copy = guild
@@ -1421,10 +1438,12 @@ final class DiscordStore {
                 guildFactVersions[deleted.id, default: 0] &+= 1
                 if deleted.unavailable == true { guilds[deleted.id]?.unavailable = true }
                 if deleted.unavailable != true {
+                    serverMembershipRevision = UUID()
                     deletedFactGuilds.insert(deleted.id)
                     myMembers[deleted.id] = nil
                     guilds[deleted.id] = nil
                     guildOrder.removeAll { $0 == deleted.id }
+                    folders = withoutDepartedServers(folders)
                     for channel in channels.values where channel.guildID == deleted.id { changedChannel(channel.id) }
                     channels = channels.filter { $0.value.guildID != deleted.id }
                 }

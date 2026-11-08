@@ -139,6 +139,7 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
                     Emoji(id: Snowflake(2_000 + UInt64(index)), name: name, animated: false)
                 }
             }
+            if guild.ownerID == nil { guild.ownerID = users[0].id }
             guilds.append(guild)
         }
         self.guilds = guilds
@@ -1251,7 +1252,39 @@ final class MockDiscord: DiscordAPI, @unchecked Sendable {
         return response
     }
 
-    func settingsProto() async throws -> String? { nil }
+    private var savedServerSettings: String?
+    private var departedServers: Set<Snowflake> = []
+    var serverWriteHook: (@Sendable (String) async throws -> Void)?
+    private(set) var serverWrites: [String] = []
+
+    func settingsProto() async throws -> String? {
+        lock.withLock { savedServerSettings } ?? Self.versionedServerSettings(guilds: guilds.map(\.id))
+    }
+
+    static func versionedServerSettings(guilds: [Snowflake]) -> String {
+        (Data([0x0A, 0x02, 0x18, 0x01]) + Data(base64Encoded: foldersProto(guilds: guilds))!).base64EncodedString()
+    }
+
+    func saveGuildFolders(_ patch: GuildFolderPatch, admission: @escaping @Sendable () async -> Bool) async throws -> GuildFolderSaveResponse {
+        if let hook = lock.withLock({ serverWriteHook }) { try await hook("order") }
+        guard await admission() else { throw CancellationError() }
+        try failIfAsked("DuocordMockServerFail")
+        let old = try GuildFolderSettings(base64: try await settingsProto()!)
+        guard old.dataVersion == patch.requiredDataVersion else { throw DiscordError.http(409, "Settings changed") }
+        let departed = lock.withLock { departedServers }
+        let order = try GuildOrganization(folders: GuildFolderSettings(base64: patch.settings).folders,
+                                          membershipOrder: guilds.map(\.id).filter { !departed.contains($0) })
+        let next = try old.replacingFolders(with: order, version: patch.requiredDataVersion + 1)
+        lock.withLock { savedServerSettings = next.base64; serverWrites.append("order") }
+        return GuildFolderSaveResponse(settings: next.base64, outOfDate: false)
+    }
+
+    func leaveGuild(_ guild: Snowflake, admission: @escaping @Sendable () async -> Bool) async throws {
+        if let hook = lock.withLock({ serverWriteHook }) { try await hook("leave") }
+        guard await admission() else { throw CancellationError() }
+        try failIfAsked("DuocordMockServerFail")
+        lock.withLock { departedServers.insert(guild); serverWrites.append("leave") }
+    }
 }
 
 /// Emits READY for the mock data set, then occasional typing, plus the

@@ -1,0 +1,55 @@
+{
+  "base": "2da02168cce3ee3ab68a33d06462b0f28fdce23e",
+  "base_reason": "Latest shipped TestFlight source; preserve App Store readiness changes",
+  "tests": {
+    "final_filtered_suite": {
+      "total": 851,
+      "skipped": 2,
+      "failures": 0,
+      "exit": 0
+    },
+    "feature_methods": 15,
+    "route_contract_methods": 12,
+    "excluded_reproduced_baseline_methods": [
+      "DuoLayoutTests/testHiddenSidebarRevealAndTitleSurviveScrolling",
+      "DuoLayoutTests/testHidingSidebarAfterScrollingKeepsReveal",
+      "DuoLayoutTests/testSidebarFooterSitsJustAboveHomeIndicator",
+      "InboxUnreadPreviewTests/testBlockedAndSpoilerPreviewsStayConcealed",
+      "LookupPagingBoundaryTests/testForumAssociationValidationRetainsKnownConcealmentAndOwnerFallback",
+      "LookupPagingBoundaryTests/testForumDuplicateCannotReplaceMissingBlockedOwnerFallbackWithOtherAuthor",
+      "NotificationAlertActionTests/testPostedCategoryFollowsReplyAuthorityAndActionsNeedUnlockWithoutForeground"
+    ],
+    "baseline_layout_exit": 65,
+    "baseline_extra_exit": 65,
+    "scene_transient": "8 UIWindowScene failures in earlier run passed in final serial suite",
+    "focused_after_native_fix": {
+      "total": 27,
+      "failures": 0,
+      "exit": 0,
+      "feature_methods": 15,
+      "route_contract_methods": 12,
+      "result_bundle": "build/server-management/drag-fix-focused.xcresult"
+    }
+  },
+  "simulator_build_exit": 0,
+  "runtime_ui": "PASS final noninstrumented artifact: primary native drag, named confirmation and Cancel, confirmed leave/DM return, post-leave native drag, mocked403 reorder failure retention. Mock-only; no live account writes.",
+  "source_inputs": 93,
+  "source_manifest_sha256": "eca31890c58f660713b4adacbf66c586846d0b1b5f73ccd577c4d3866a5b5296",
+  "review": {
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "rounds": 3,
+    "status": "completed",
+    "verdict": "APPROVE",
+    "round1_findings": "S1 fixture compile, S2 leave-then-reorder, S3 first folder member Move to Top; all resolved",
+    "limitation": "fresh independent instance, same model as implementation; Opus unavailable at rate limit",
+    "round3": "APPROVE four-file native type registration delta; no findings",
+    "task_id": "node:delegated-task:command%3Amcp%3A6c7890d9-28d3-4e69-8103-2830494377c9%3Adelegate-task%3A0dc0dba2-87bd-452a-a668-1db94307e7d4"
+  },
+  "owned_derived_data": {
+    "invocations": 9,
+    "all_absent": true
+  },
+  "shipping": "Runtime and source review gates passed; PR publication and TestFlight delivery in progress"
+}

@@ -90,6 +90,7 @@ final class AppModel {
     private(set) var isMock = false
 
     // Navigation
+    let servers = ServerManagement()
     let people = PeopleOperations()
     let threads = ThreadOperations()
     @ObservationIgnored var navigationIntent = UUID()
@@ -641,6 +642,10 @@ final class AppModel {
                 automaticReadCeilings[channel] = nil
             }
             updateBadge()
+        case "GUILD_DELETE":
+            if let deleted = try? dispatch.decode(GuildDelete.self), deleted.unavailable != true {
+                removeServerLocally(deleted.id)
+            } else { store.handle(dispatch) }
         case "CHANNEL_DELETE", "THREAD_DELETE":
             // Whoever deleted it, the open conversation falls back to its parent.
             let selected = selectedChannel.flatMap { store.channel($0) }
@@ -792,6 +797,24 @@ final class AppModel {
             select(channel: channel)
             if selectedChannel == channel, let message { revealRequest = (channel, message, UUID()) }
         }
+    }
+
+    func removeServerLocally(_ guild: Snowflake) {
+        let channels = Set(store.channels.values.filter { $0.guildID == guild }.map(\.id))
+        for payload in Array(outgoing.values) where channels.contains(payload.echo.channelID) { discard(payload.echo) }
+        for channel in channels {
+            ackTasks.removeValue(forKey: channel)?.cancel()
+            drafts[channel] = nil; stashedDrafts[channel] = nil; anchors[channel] = nil
+            unreadMarkers[channel] = nil; unreadTargets[channel] = nil; automaticReadCeilings[channel] = nil
+        }
+        messages.removeChannels(channels)
+        if voice.call?.guildID == guild || voice.joining.map({ channels.contains($0) }) == true { voice.leave() }
+        let data = try! JSONEncoder().encode(["d": ["id": guild.description]])
+        store.handle(GatewayDispatch(name: "GUILD_DELETE", data: data))
+        if selectedGuild == guild { selectedGuild = nil }
+        validateSelection()
+        if servers.confirmation?.guild == guild { servers.confirmation = nil }
+        saveNavigation(); saveCache(); updateBadge()
     }
 
     private func validateSelection() {
@@ -1121,6 +1144,7 @@ final class AppModel {
 
     private func beginAccountGeneration() {
         accountGeneration = UUID()
+        servers.reset()
         let waiters = readyWaiters
         readyWaiters = [:]
         waiters.values.forEach { $0.resume(returning: false) }

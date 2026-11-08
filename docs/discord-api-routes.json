@@ -1,5 +1,5 @@
 {
-  "validationDate": "2026-11-07",
+  "validationDate": "2026-11-09",
   "evidence": "offline URLProtocol; no live human-account validation",
   "protocolMethods": [
     "channel",
@@ -36,7 +36,9 @@
     "deleteThread",
     "joinThread",
     "leaveThread",
-    "modifyThreadSettings"
+    "modifyThreadSettings",
+    "saveGuildFolders",
+    "leaveGuild"
   ],
   "endpoints": [
     "ack",
@@ -72,6 +74,8 @@
     "send",
     "settingsProto",
     "threadSettings",
-    "typing"
+    "typing",
+    "saveSettingsProto",
+    "leaveGuild"
   ]
 }
