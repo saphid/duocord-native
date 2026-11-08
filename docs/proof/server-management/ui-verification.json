@@ -1,0 +1,48 @@
+{
+  "status": "blocked_device_unavailable",
+  "recorded_at": "2026-11-08T22:44:42.813884+00:00",
+  "host_id": "local",
+  "requested_device_id": "8E509496-7A33-4AF4-8E08-78218F2DF7C6",
+  "app_id": "com.saphid.duocord",
+  "app_launched": false,
+  "checks": {
+    "native_drag_order": "not_run",
+    "leave_named_confirmation": "not_run",
+    "cancel_retains_server": "not_run",
+    "confirm_removes_exact_server": "not_run",
+    "selection_returns_home": "not_run",
+    "reorder_after_leave": "not_run",
+    "mock_failure_feedback": "not_run",
+    "mock_failure_preserves_server": "not_run"
+  },
+  "tool_calls": [
+    {
+      "tool": "device_open",
+      "attempt": 1,
+      "isError": true,
+      "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+    },
+    {
+      "tool": "device_list",
+      "isError": false,
+      "observed": "Requested device absent; local iOS platform ready; no open device sessions. Different server-management device B8344F4C-70CD-43A9-8FB4-7B5481C11723 listed; not opened."
+    },
+    {
+      "tool": "device_open",
+      "attempt": 2,
+      "isError": true,
+      "error": "No device 8E509496-7A33-4AF4-8E08-78218F2DF7C6 on 'This machine' (hostId local). Call device_list for current ids."
+    }
+  ],
+  "cli_commands": [],
+  "cli_exit_statuses": [],
+  "screenshots_captured": [],
+  "video_captured": false,
+  "product_bug_identified": false,
+  "limits": [
+    "Stopped after repeated device_open failure per device boundary.",
+    "No native UI behavior observed; no test may be treated as passed.",
+    "No app launch, simulator input, build, source edit, live Discord action or subagent work performed."
+  ],
+  "cleanup": "No device session opened; nothing to close."
+}

@@ -1149,6 +1149,10 @@ final class MessageCenter {
 
     func invalidatePrivacy() { timelines.values.forEach { $0.invalidatePrivacy() } }
 
+    func removeChannels(_ channels: Set<Snowflake>) {
+        for channel in channels { timelines[channel] = nil }
+    }
+
     func reset() { timelines = [:] }
 
     /// A new gateway session (not a resume): any timeline may have gaps.

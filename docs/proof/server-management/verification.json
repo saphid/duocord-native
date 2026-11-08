@@ -1,0 +1,45 @@
+{
+  "base": "2da02168cce3ee3ab68a33d06462b0f28fdce23e",
+  "base_reason": "Latest shipped TestFlight source; preserve App Store readiness changes",
+  "tests": {
+    "final_filtered_suite": {
+      "total": 851,
+      "skipped": 2,
+      "failures": 0,
+      "exit": 0
+    },
+    "feature_methods": 14,
+    "route_contract_methods": 12,
+    "excluded_reproduced_baseline_methods": [
+      "DuoLayoutTests/testHiddenSidebarRevealAndTitleSurviveScrolling",
+      "DuoLayoutTests/testHidingSidebarAfterScrollingKeepsReveal",
+      "DuoLayoutTests/testSidebarFooterSitsJustAboveHomeIndicator",
+      "InboxUnreadPreviewTests/testBlockedAndSpoilerPreviewsStayConcealed",
+      "LookupPagingBoundaryTests/testForumAssociationValidationRetainsKnownConcealmentAndOwnerFallback",
+      "LookupPagingBoundaryTests/testForumDuplicateCannotReplaceMissingBlockedOwnerFallbackWithOtherAuthor",
+      "NotificationAlertActionTests/testPostedCategoryFollowsReplyAuthorityAndActionsNeedUnlockWithoutForeground"
+    ],
+    "baseline_layout_exit": 65,
+    "baseline_extra_exit": 65,
+    "scene_transient": "8 UIWindowScene failures in earlier run passed in final serial suite"
+  },
+  "simulator_build_exit": 0,
+  "runtime_ui": "blocked_device_unavailable; no UI checks passed",
+  "source_inputs": 93,
+  "source_manifest_sha256": "695ae027f165fea085dbc3b874ae758c82fb497106047a89f664a89dd19c0058",
+  "review": {
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "rounds": 2,
+    "status": "completed",
+    "verdict": "APPROVE",
+    "round1_findings": "S1 fixture compile, S2 leave-then-reorder, S3 first folder member Move to Top; all resolved",
+    "limitation": "fresh independent instance, same model as implementation; Opus unavailable at rate limit"
+  },
+  "owned_derived_data": {
+    "invocations": 9,
+    "all_absent": true
+  },
+  "shipping": "PR prepared; merge and TestFlight held for runtime proof"
+}

@@ -221,6 +221,8 @@ nonisolated protocol DiscordAPI: Sendable {
     func relationship(user: Snowflake, action: RelationshipAction) async throws
     func requestFriend(username: FriendUsername) async throws
     func createDM(recipient: Snowflake) async throws -> Channel
+    func saveGuildFolders(_ patch: GuildFolderPatch, admission: @escaping @Sendable () async -> Bool) async throws -> GuildFolderSaveResponse
+    func leaveGuild(_ guild: Snowflake, admission: @escaping @Sendable () async -> Bool) async throws
     func settingsProto() async throws -> String?
     /// `PATCH channels/{thread}`: rename, close/reopen, lock/unlock. Returns the updated thread.
     func modifyThread(_ thread: Snowflake, patch: ThreadPatch) async throws -> Channel
@@ -241,6 +243,9 @@ extension Emoji {
 }
 
 extension DiscordAPI {
+    func saveGuildFolders(_ patch: GuildFolderPatch, admission: @escaping @Sendable () async -> Bool) async throws -> GuildFolderSaveResponse { throw DiscordError.unauthorized }
+    func leaveGuild(_ guild: Snowflake, admission: @escaping @Sendable () async -> Bool) async throws { throw DiscordError.unauthorized }
+
     /// Legacy/mock transports cannot report their dispatch boundary, so once
     /// entered they are conservatively treated as dispatched.
     func send(channel: Snowflake, content: String, replyTo: Snowflake?, pingReply: Bool, attachments: [OutgoingAttachment], nonce: String, attempt: SendAttempt) async throws -> Message {
@@ -609,6 +614,16 @@ actor DiscordREST: DiscordAPI {
         } catch {
             throw DiscordError.decoding(DiscordEndpoint.threadSettings(ChannelID(thread.raw)).descriptor.template)
         }
+    }
+
+    func saveGuildFolders(_ patch: GuildFolderPatch, admission: @escaping @Sendable () async -> Bool) async throws -> GuildFolderSaveResponse {
+        try await request(.saveSettingsProto, body: ["settings": .string(patch.settings),
+            "required_data_version": .number(Double(patch.requiredDataVersion))], sendAttempt: SendAttempt(authority: admission))
+    }
+
+    func leaveGuild(_ guild: Snowflake, admission: @escaping @Sendable () async -> Bool) async throws {
+        let data = try await raw(.leaveGuild(GuildID(guild.raw)), body: nil, sendAttempt: SendAttempt(authority: admission))
+        guard data.isEmpty else { throw DiscordError.decoding("Unexpected Leave Server response; membership may have changed") }
     }
 
     func settingsProto() async throws -> String? {
