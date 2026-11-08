@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.closePanel) private var closePanel
     private func close() { if let closePanel { closePanel() } else { dismiss() } }
     @State private var confirmSignOut = false
+    @State private var showingContentReport = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -77,6 +78,8 @@ struct SettingsView: View {
                     Text("When iPhone Duo rests half-open like a book, servers and channels fill the left page and the conversation fills the right.")
                 }
                 Section {
+                    Button("Report Content", systemImage: "flag") { showingContentReport = true }
+                    Link("Contact Support", destination: URL(string: "mailto:\(ContentReportDraft.recipient)")!)
                     Link("Privacy Policy", destination: URL(string: "https://saphid.app/duocord-native/privacy")!)
                     Text("Age-restricted channels stay hidden in Duocord, including their messages in search results and notifications.")
                         .font(.footnote)
@@ -109,6 +112,9 @@ struct SettingsView: View {
             .toolbarVisibility(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { close() } }
+            }
+            .sheet(isPresented: $showingContentReport) {
+                ContentReportView(target: nil, isDemo: model.isMock)
             }
         }
     }

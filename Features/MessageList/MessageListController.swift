@@ -1,4 +1,5 @@
 import UIKit
+import SwiftUI
 import os
 
 /// Where a channel was scrolled to: survives view rebuilds (fold, rotation,
@@ -866,7 +867,10 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
               let message = timeline.messages.first(where: { $0.id == id }) else { return nil }
         if store.hidesBlockedMessage(message) {
             return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-                UIMenu(children: [UIAction(title: "Reveal blocked message") { _ in self?.store.revealBlockedMessage(id) }])
+                UIMenu(children: [
+                    UIAction(title: "Reveal blocked message") { _ in self?.store.revealBlockedMessage(id) },
+                    UIAction(title: "Report Message", image: UIImage(systemName: "flag")) { _ in self?.report(message) }
+                ])
             }
         }
         // A long press on a reaction shows who reacted instead.
@@ -886,6 +890,9 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
                 })
             }
             if sendState == nil {
+                actions.append(UIAction(title: "Report Message", image: UIImage(systemName: "flag")) { [weak self] _ in
+                    self?.report(message)
+                })
                 actions.append(UIAction(title: "Mark Unread", image: UIImage(systemName: "envelope.badge")) { [weak self] _ in
                     self?.host?.list(markUnread: message)
                 })
@@ -942,6 +949,12 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
     }
 
     static let defaultQuickReactions = ["👍", "❤️", "😂", "🎉", "👀"]
+
+    private func report(_ message: Message) {
+        guard viewIfLoaded?.window != nil, presentedViewController == nil else { return }
+        let target = ContentReportTarget(guildID: message.guildID, channelID: message.channelID, messageID: message.id)
+        present(UIHostingController(rootView: ContentReportView(target: target, isDemo: api is MockDiscord)), animated: true)
+    }
 
     /// Discord's confirmation before deleting your message.
     func confirmDelete(_ message: Message) {

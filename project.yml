@@ -92,6 +92,7 @@ targets:
     sources:
       - Tests/AppStoreReadinessTests.swift
       - Tests/ContentSafetyTests.swift
+      - Tests/ContentReportTests.swift
     dependencies:
       - target: DuocordNative
     settings:
