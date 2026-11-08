@@ -80,7 +80,11 @@ struct ContentReportView: View {
                     Text("Reports go to Alex Southwell, Duocord's developer. Your email app sends the report only after you review it and choose Send.")
                         .font(.footnote)
                     if let target {
-                        Text(target.link).font(.footnote).textSelection(.enabled)
+                        if isDemo {
+                            Text(target.link).font(.footnote).textSelection(.disabled)
+                        } else {
+                            Text(target.link).font(.footnote).textSelection(.enabled)
+                        }
                     }
                 } header: {
                     Text("Private report")

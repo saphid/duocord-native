@@ -952,8 +952,13 @@ final class MessageListController: UIViewController, UICollectionViewDataSource,
 
     private func report(_ message: Message) {
         guard viewIfLoaded?.window != nil, presentedViewController == nil else { return }
-        let target = ContentReportTarget(guildID: message.guildID, channelID: message.channelID, messageID: message.id)
+        let target = reportTarget(for: message)
         present(UIHostingController(rootView: ContentReportView(target: target, isDemo: api is MockDiscord)), animated: true)
+    }
+
+    func reportTarget(for message: Message) -> ContentReportTarget {
+        // REST history can omit guild_id even for messages in a server channel.
+        ContentReportTarget(guildID: message.guildID ?? guildID, channelID: message.channelID, messageID: message.id)
     }
 
     /// Discord's confirmation before deleting your message.

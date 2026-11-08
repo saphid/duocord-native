@@ -2,6 +2,24 @@ import XCTest
 @testable import DuocordNative
 
 final class ContentReportTests: XCTestCase {
+    @MainActor
+    func testHistoryReportLinkUsesKnownServerWithoutChangingPrivateMessageLinks() throws {
+        let data = Data(#"{"id":"3","channel_id":"2","author":{"id":"4","username":"reporter"},"content":"private text"}"#.utf8)
+        let message = try JSONDecoder().decode(Message.self, from: data)
+        XCTAssertNil(message.guildID)
+        let mock = MockDiscord()
+        func list(guildID: Snowflake?) -> MessageListController {
+            MessageListController(timeline: MessageTimeline(channelID: 2), store: DiscordStore(), api: mock,
+                                  guildID: guildID, title: "test", subtitle: "", icon: "number", anchor: nil, unreadAfter: nil)
+        }
+        let serverTarget = list(guildID: 1).reportTarget(for: message)
+        XCTAssertEqual(serverTarget.link, "https://discord.com/channels/1/2/3")
+        XCTAssertEqual(list(guildID: nil).reportTarget(for: message).link, "https://discord.com/channels/@me/2/3")
+        let draft = ContentReportDraft(target: serverTarget, reason: .other, details: "")
+        XCTAssertTrue(draft.body.contains(serverTarget.link))
+        XCTAssertFalse(draft.body.contains(message.content))
+    }
+
     func testReportContainsOnlySelectedIdentifiersAndReporterDetails() {
         let target = ContentReportTarget(guildID: 1, channelID: 2, messageID: 3)
         let draft = ContentReportDraft(target: target, reason: .spam, details: "  Please investigate.  ")
