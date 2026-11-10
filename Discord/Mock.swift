@@ -1334,6 +1334,33 @@ final class MockGateway: GatewayConnection, @unchecked Sendable {
 
     func disconnect() async { continuation.yield(.status(.disconnected)) }
 
+    #if DEBUG
+    /// `-DuocordMockThreadSync <count>`: two seconds after a server is
+    /// subscribed, with its conversation on screen, that many active threads
+    /// the app has not seen arrive in one THREAD_LIST_SYNC, as Discord answers
+    /// a subscription to a busy server.
+    static let threadSyncBase: UInt64 = 956_000_000_000_000_000
+    private func syncThreads(in guild: Guild) {
+        let count = UserDefaults.standard.integer(forKey: "DuocordMockThreadSync")
+        let parents = guild.channels.filter { $0.type == .text }
+        guard count > 0, !parents.isEmpty else { return }
+        struct Sync: Encodable { var guild_id: Snowflake; var threads: [Channel] }
+        struct Envelope: Encodable { var d: Sync }
+        let threads = (0..<count).map { n in
+            var thread = Channel(id: Snowflake(Self.threadSyncBase + guild.id.raw % 1_000_000 * 1_000 + UInt64(n)), type: .publicThread,
+                                 name: "Active thread \(n)", parentID: parents[n % parents.count].id)
+            thread.lastMessageID = Snowflake.at(Date.now.addingTimeInterval(-Double(n) * 90))
+            thread.threadMetadata = ThreadMetadata(archived: false, locked: false)
+            return thread
+        }
+        guard let json = try? JSONEncoder().encode(Envelope(d: Sync(guild_id: guild.id, threads: threads))) else { return }
+        Task { [continuation] in
+            try? await Task.sleep(for: .seconds(2))
+            continuation.yield(.dispatch(GatewayDispatch(name: "THREAD_LIST_SYNC", data: json)))
+        }
+    }
+    #endif
+
     /// Answers like Discord: members whose username or nickname starts with the query.
     func requestMembers(guild: Snowflake, query: String, limit: Int) async {
         guard let data else { return }
@@ -1386,6 +1413,9 @@ final class MockGateway: GatewayConnection, @unchecked Sendable {
         if let json = try? JSONEncoder().encode(payload) {
             continuation.yield(.dispatch(GatewayDispatch(name: "GUILD_MEMBER_LIST_UPDATE", data: json)))
         }
+        #if DEBUG
+        syncThreads(in: guildInfo)
+        #endif
         if let channel {
             // Someone is typing in the open channel.
             let typing: JSONValue = .object(["d": .object(["channel_id": .string(channel.description), "guild_id": .string(guild.description),

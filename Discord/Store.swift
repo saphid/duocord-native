@@ -127,7 +127,27 @@ final class DiscordStore {
     }
     private func privacyChanged() {
         privacyRevision &+= 1
-        onPrivacyChange?()
+        announcePrivacyChange()
+    }
+    @ObservationIgnored private var privacyBatchDepth = 0
+    @ObservationIgnored private var privacyChangeOwed = false
+    private func announcePrivacyChange() {
+        if privacyBatchDepth > 0 { privacyChangeOwed = true } else { onPrivacyChange?() }
+    }
+    /// Listeners redraw every open conversation, so READY or one gateway
+    /// event announces its privacy changes once, from the finished state.
+    /// One announcement per blocked person or unseen thread froze the app
+    /// for seconds after launch.
+    private func batchingPrivacyChanges<T>(_ changes: () throws -> T) rethrows -> T {
+        privacyBatchDepth += 1
+        defer {
+            privacyBatchDepth -= 1
+            if privacyBatchDepth == 0, privacyChangeOwed {
+                privacyChangeOwed = false
+                onPrivacyChange?()
+            }
+        }
+        return try changes()
     }
     private func resetPeople() {
         messageContentRevisions = [:]
@@ -1107,6 +1127,10 @@ final class DiscordStore {
     /// Draws the last known state before the gateway connects. READY replaces it.
     func apply(snapshot: StoreSnapshot) {
         guard !isReady else { return }
+        batchingPrivacyChanges { applyUnbatched(snapshot: snapshot) }
+    }
+
+    private func applyUnbatched(snapshot: StoreSnapshot) {
         resetPeople()
         resetReadOperations()
         resetPins()
@@ -1128,6 +1152,10 @@ final class DiscordStore {
     }
 
     func apply(ready: ReadyPayload) {
+        batchingPrivacyChanges { applyUnbatched(ready: ready) }
+    }
+
+    private func applyUnbatched(ready: ReadyPayload) {
         resetPeople()
         presences = [:]
         resetReadOperations()
@@ -1273,7 +1301,7 @@ final class DiscordStore {
         for user in channel.recipients ?? [] { users[user.id] = user }
         if channel.type.isPrivate { sortPrivateChannels() }
         if previous?.nsfw != channel.nsfw || previous?.parentID != channel.parentID {
-            onPrivacyChange?()
+            announcePrivacyChange()
         }
     }
 
@@ -1306,7 +1334,9 @@ final class DiscordStore {
 
     /// Threads and forum posts loaded over REST join the known channels.
     func remember(threads: [Channel]) {
-        for thread in threads where channels[thread.id] == nil || channels[thread.id] != thread { upsert(channel: thread) }
+        batchingPrivacyChanges {
+            for thread in threads where channels[thread.id] == nil || channels[thread.id] != thread { upsert(channel: thread) }
+        }
         if threads.contains(where: { $0.member != nil }) { scheduleMuteExpiry() }
     }
 
@@ -1386,6 +1416,10 @@ final class DiscordStore {
     }
 
     func handle(_ dispatch: GatewayDispatch) {
+        batchingPrivacyChanges { handleUnbatched(dispatch) }
+    }
+
+    private func handleUnbatched(_ dispatch: GatewayDispatch) {
         do {
             switch dispatch.name {
             case "RELATIONSHIP_ADD", "RELATIONSHIP_UPDATE", "RELATIONSHIP_REMOVE":
