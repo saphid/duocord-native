@@ -7,6 +7,9 @@ struct DuocordNativeApp: App {
 
     init() {
         Perf.shared.markOnce("appInit")
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "DuocordPerfStalls") { Perf.shared.startStallMonitor() }
+        #endif
         NotificationService.shared.activate()
         // Start before the first frame so it already shows the last session.
         // (No web views are created here: they must wait for the window.)

@@ -115,6 +115,38 @@ final class Perf {
         lastTimestamp = link.timestamp
     }
 
+    // MARK: Main-thread stalls
+
+    private var watchingStalls = false
+
+    /// `-DuocordPerfStalls YES` (debug builds): a watchdog thread times how
+    /// long the main thread takes to run a block. Each wait of `threshold` or
+    /// more is recorded as a `stall`: its length, and when it began, in
+    /// milliseconds since launch. Shows launch and event-burst hangs from
+    /// perf.jsonl, without a profiler.
+    func startStallMonitor(threshold: TimeInterval = 0.05) {
+        guard !watchingStalls else { return }
+        watchingStalls = true
+        let launchStart = launchStart
+        Thread.detachNewThread {
+            Thread.current.name = "duocord.perf.stalls"
+            let serviced = DispatchSemaphore(value: 0)
+            while true {
+                let asked = ProcessInfo.processInfo.systemUptime
+                DispatchQueue.main.async { serviced.signal() }
+                serviced.wait()
+                let waited = ProcessInfo.processInfo.systemUptime - asked
+                if waited >= threshold {
+                    let ms = (waited * 1000).rounded(), at = ((asked - launchStart) * 1000).rounded()
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { Perf.shared.record("stall", ["ms": ms, "at": at]) }
+                    }
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+    }
+
     private func write(_ record: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]),
               let line = String(data: data, encoding: .utf8) else { return }
