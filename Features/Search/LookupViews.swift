@@ -737,17 +737,12 @@ struct MediaViewer: View {
     @Environment(\.closePanel) private var closePanel
     private func close() { if let closePanel { closePanel() } else { dismiss() } }
     let item: MediaItem
-    @State private var scale: CGFloat = 1
 
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
                 let size = MessageLayoutEngine.fit(item, maxWidth: proxy.size.width, maxHeight: proxy.size.height)
-                RemoteImage(url: item.url, size: size, contentMode: .fit)
-                    .scaleEffect(scale)
-                    .gesture(MagnifyGesture().onChanged { scale = max(1, $0.magnification) }.onEnded { _ in withAnimation { scale = 1 } })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityLabel(item.alt ?? "Image")
+                ZoomableMediaImage(url: item.url, imageSize: size, label: item.alt ?? "Image")
             }
             .background(Color.black.ignoresSafeArea())
             .toolbar {
