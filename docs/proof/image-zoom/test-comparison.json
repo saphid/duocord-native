@@ -1,0 +1,20 @@
+{
+  "candidate": [
+    "DuocordNativeTests.DuoLayoutTests testHiddenSidebarRevealAndTitleSurviveScrolling",
+    "DuocordNativeTests.DuoLayoutTests testHidingSidebarAfterScrollingKeepsReveal",
+    "DuocordNativeTests.DuoLayoutTests testSidebarFooterSitsJustAboveHomeIndicator",
+    "DuocordNativeTests.InboxUnreadPreviewTests testBlockedAndSpoilerPreviewsStayConcealed",
+    "DuocordNativeTests.LookupPagingBoundaryTests testForumAssociationValidationRetainsKnownConcealmentAndOwnerFallback",
+    "DuocordNativeTests.LookupPagingBoundaryTests testForumDuplicateCannotReplaceMissingBlockedOwnerFallbackWithOtherAuthor",
+    "DuocordNativeTests.NotificationAlertActionTests testPostedCategoryFollowsReplyAuthorityAndActionsNeedUnlockWithoutForeground"
+  ],
+  "main": [
+    "DuocordNativeTests.DuoLayoutTests testHiddenSidebarRevealAndTitleSurviveScrolling",
+    "DuocordNativeTests.DuoLayoutTests testHidingSidebarAfterScrollingKeepsReveal",
+    "DuocordNativeTests.DuoLayoutTests testSidebarFooterSitsJustAboveHomeIndicator",
+    "DuocordNativeTests.InboxUnreadPreviewTests testBlockedAndSpoilerPreviewsStayConcealed",
+    "DuocordNativeTests.LookupPagingBoundaryTests testForumAssociationValidationRetainsKnownConcealmentAndOwnerFallback",
+    "DuocordNativeTests.LookupPagingBoundaryTests testForumDuplicateCannotReplaceMissingBlockedOwnerFallbackWithOtherAuthor",
+    "DuocordNativeTests.NotificationAlertActionTests testPostedCategoryFollowsReplyAuthorityAndActionsNeedUnlockWithoutForeground"
+  ]
+}
